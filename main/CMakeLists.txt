@@ -3,6 +3,8 @@ file(GLOB_RECURSE srcs ${CMAKE_CURRENT_LIST_DIR}/*.c ${CMAKE_CURRENT_LIST_DIR}/*
 set(incs ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/node
     ${CMAKE_CURRENT_SOURCE_DIR}/../components/sscma-micro/sscma-micro/sscma
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/sscma-micro/porting/sophgo
+    ${CMAKE_CURRENT_SOURCE_DIR}/../components/sscma-micro/porting/sophgo/sg200x
 )
 
 component_register(
