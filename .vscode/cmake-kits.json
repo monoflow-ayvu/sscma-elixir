@@ -1,0 +1,15 @@
+[
+    {
+        "name": "SG200X SDK",
+        "environmentVariables": {
+            "SG200X_SDK_PATH": "${env:HOME}/recamera/sg2002_recamera_emmc/",
+            "PATH": "${env:HOME}/recamera/host-tools/gcc/riscv64-linux-musl-x86_64/bin:${env:PATH}"
+        },
+        "preferredGenerator": {
+            "name": "Unix Makefiles"
+        },
+        "cmakeSettings": {
+            "CMAKE_BUILD_TYPE": "Debug"
+        }
+    }
+]
