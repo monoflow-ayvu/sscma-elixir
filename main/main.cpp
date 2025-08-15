@@ -395,7 +395,7 @@ int main(int argc, char** argv)
                                 float x2 = (it.box.x + it.box.w / 2.0f) * pre.cols;
                                 float y2 = (it.box.y + it.box.h / 2.0f) * pre.rows;
                                 sj["box_abs"] = { {"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2} };
-                                sj["mask"] = { {"width", it.mask.width}, {"height", it.mask.height} };
+                                sj["mask"] = { {"width", it.mask.width}, {"height", it.mask.height}, {"data", it.mask.data} };
                                 results.push_back(sj);
                             }
                         }
