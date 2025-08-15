@@ -128,12 +128,12 @@ static inline bool startWrapperPipeline()
         std::cerr << "registerVideoFrameHandler failed" << std::endl;
         return false;
     }
-    usleep(100000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     if (startVideo() != 0)
     {
         std::cerr << "startVideo failed. Trying to continue anyway." << std::endl;
     }
-    usleep(1000000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     return true;
 }
 
@@ -167,7 +167,7 @@ int main()
 
     g_start_time = std::chrono::steady_clock::now();
     while (g_running.load()) {
-        usleep(100000);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     std::cout << std::endl
