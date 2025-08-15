@@ -145,6 +145,9 @@ int main()
     // Set up signal handlers for graceful shutdown
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
+    signal(SIGKILL, signalHandler);
+    signal(SIGQUIT, signalHandler);
+    signal(SIGABRT, signalHandler);
 
     // Ensure wrapper state is clean
     deinitVideo();
@@ -159,12 +162,13 @@ int main()
     std::cout << std::endl
               << "=== WRAPPER PIPELINE READY ===" << std::endl;
     std::cout << "Channels: CH0 H264 1920x1080@15, CH1 JPEG 640x480@15" << std::endl;
-    std::cout << "Starting 5-second capture..." << std::endl;
+    std::cout << "Starting capture..." << std::endl;
     std::cout << std::endl;
 
-    usleep(2000000);
     g_start_time = std::chrono::steady_clock::now();
-    usleep(5000000); // 5 seconds capture window
+    while (g_running.load()) {
+        usleep(100000);
+    }
 
     std::cout << std::endl
               << "=== CAPTURE COMPLETED ===" << std::endl;
