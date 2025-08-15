@@ -676,7 +676,7 @@ static inline bool startWrapperPipeline() {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_start_time).count();
         int idx = g_frame_count.fetch_add(1) + 1;
         std::string b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
-        std::cout << "Frame " << idx << " [" << elapsed << "ms] Size: " << len << " bytes\n";
+        std::cout << std::endl << std::endl << "Frame " << idx << " [" << elapsed << "ms] Size: " << len << " bytes\n";
         std::cout << "data:image/jpeg;base64," << b64 << "\n\n";
         return 0;
     }, nullptr) != 0) {
