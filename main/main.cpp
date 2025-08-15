@@ -45,6 +45,7 @@ extern "C"
 std::atomic<bool> g_running(true);
 std::atomic<int> g_frame_count(0);
 std::chrono::steady_clock::time_point g_start_time;
+std::chrono::steady_clock::time_point last_frame_time;
 
 // Signal handler for graceful shutdown
 void signalHandler(int signal)
@@ -110,12 +111,7 @@ static std::string findModelPath()
     if (envPath && *envPath)
         return std::string(envPath);
 
-    const char *kModelDir = "/userdata/MODEL/";
-    std::vector<cv::String> files;
-    cv::glob(std::string(kModelDir) + "/*.cvimodel", files, false);
-    if (!files.empty())
-        return std::string(files[0]);
-    return std::string();
+    return std::string("/opt/models/default.cvimodel");
 }
 
 static cv::Mat preprocessImage(cv::Mat &image, ma::Model *model)
@@ -221,12 +217,14 @@ int main()
 
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_start_time).count();
+        auto elapsed_since_last_frame = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_frame_time).count();
         int idx = g_frame_count.fetch_add(1) + 1;
         std::string b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
 
         nlohmann::json j;
         j["frame_num"] = idx;
         j["elapsed"] = elapsed;
+        j["elapsed_since_last_frame"] = elapsed_since_last_frame;
         j["jpeg_size"] = len;
         j["base64_str"] = b64;
 
@@ -296,7 +294,9 @@ int main()
         }
 
         std::cout << j.dump() << std::endl;
-        return 0; }, nullptr);
+        last_frame_time = std::chrono::steady_clock::now();
+        return 0;
+    }, nullptr);
 
     g_start_time = std::chrono::steady_clock::now();
     while (g_running.load())
