@@ -226,7 +226,7 @@ int main()
         j["elapsed"] = elapsed;
         j["elapsed_since_last_frame"] = elapsed_since_last_frame;
         j["jpeg_size"] = len;
-        j["base64_str"] = b64;
+        // j["base64_str"] = b64;
 
         if (g_engine && g_model && g_model->getInputType() == MA_INPUT_TYPE_IMAGE) {
             try {
@@ -244,17 +244,21 @@ int main()
                     img.rotate = MA_PIXEL_ROTATE_0;
 
                     ma_err_t ret = MA_OK;
+                    ma::model::Classifier* classifier = nullptr;
+                    ma::model::PoseDetector* pose = nullptr;
+                    ma::model::Segmentor* seg = nullptr;
+                    ma::model::Detector* det = nullptr;
                     if (g_model->getOutputType() == MA_OUTPUT_TYPE_CLASS) {
-                        auto* classifier = static_cast<ma::model::Classifier*>(g_model);
+                        classifier = static_cast<ma::model::Classifier*>(g_model);
                         ret = classifier->run(&img);
                     } else if (g_model->getOutputType() == MA_OUTPUT_TYPE_KEYPOINT) {
-                        auto* pose = static_cast<ma::model::PoseDetector*>(g_model);
+                        pose = static_cast<ma::model::PoseDetector*>(g_model);
                         ret = pose->run(&img);
                     } else if (g_model->getOutputType() == MA_OUTPUT_TYPE_SEGMENT) {
-                        auto* seg = static_cast<ma::model::Segmentor*>(g_model);
+                        seg = static_cast<ma::model::Segmentor*>(g_model);
                         ret = seg->run(&img);
                     } else if (g_model->getOutputType() == MA_OUTPUT_TYPE_BBOX || g_model->getOutputType() == MA_OUTPUT_TYPE_TENSOR) {
-                        auto* det = static_cast<ma::model::Detector*>(g_model);
+                        det = static_cast<ma::model::Detector*>(g_model);
                         ret = det->run(&img);
                     } else {
                         ret = MA_ENOTSUP;
@@ -276,12 +280,93 @@ int main()
                             tj["shape"] = shape;
                             tj["quant_scale"] = t.quant_param.scale;
                             tj["quant_zero"] = t.quant_param.zero_point;
+                            tj["is_physical"] = t.is_physical;
+                            tj["is_variable"] = t.is_variable;
+                            tj["name"] = t.name;
                             // std::string raw(reinterpret_cast<const char*>(t.data.data), t.size);
                             // tj["data_b64"] = macaron::Base64::Encode(raw);
                             tout.push_back(tj);
                         }
                         j["tpu"] = tout;
                         j["tpu_elapsed"] = tpu_elapsed;
+                        j["output_type"] = g_model->getOutputType();
+                        j["model_name"] = g_model->getName();
+                        j["model_type"] = g_model->getType();
+                        j["model_input_type"] = g_model->getInputType();
+
+                        // Parsed results (like example), if available
+                        nlohmann::json results = nlohmann::json::array();
+                        if (classifier) {
+                            const auto& r = classifier->getResults();
+                            for (const auto& it : r) {
+                                nlohmann::json cj;
+                                cj["kind"] = "classifier";
+                                cj["score"] = it.score;
+                                cj["target"] = it.target;
+                                results.push_back(cj);
+                            }
+                        } else if (det) {
+                            const auto& r = det->getResults();
+                            for (const auto& it : r) {
+                                nlohmann::json dj;
+                                dj["kind"] = "detector";
+                                dj["x"] = it.x;
+                                dj["y"] = it.y;
+                                dj["w"] = it.w;
+                                dj["h"] = it.h;
+                                dj["score"] = it.score;
+                                dj["target"] = it.target;
+                                // absolute coords in preprocessed image space
+                                float x1 = (it.x - it.w / 2.0f) * pre.cols;
+                                float y1 = (it.y - it.h / 2.0f) * pre.rows;
+                                float x2 = (it.x + it.w / 2.0f) * pre.cols;
+                                float y2 = (it.y + it.h / 2.0f) * pre.rows;
+                                dj["abs"] = { {"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2} };
+                                results.push_back(dj);
+                            }
+                        } else if (pose) {
+                            const auto& r = pose->getResults();
+                            for (const auto& it : r) {
+                                nlohmann::json pj;
+                                pj["kind"] = "pose";
+                                pj["box"] = {
+                                    {"x", it.box.x}, {"y", it.box.y}, {"w", it.box.w}, {"h", it.box.h},
+                                    {"score", it.box.score}, {"target", it.box.target}
+                                };
+                                float x1 = (it.box.x - it.box.w / 2.0f) * pre.cols;
+                                float y1 = (it.box.y - it.box.h / 2.0f) * pre.rows;
+                                float x2 = (it.box.x + it.box.w / 2.0f) * pre.cols;
+                                float y2 = (it.box.y + it.box.h / 2.0f) * pre.rows;
+                                pj["box_abs"] = { {"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2} };
+                                nlohmann::json pts = nlohmann::json::array();
+                                for (const auto& pt : it.pts) {
+                                    pts.push_back({ {"x", pt.x}, {"y", pt.y} });
+                                }
+                                pj["keypoints"] = pts;
+                                results.push_back(pj);
+                            }
+                        } else if (seg) {
+                            const auto& r = seg->getResults();
+                            for (const auto& it : r) {
+                                nlohmann::json sj;
+                                sj["kind"] = "segment";
+                                sj["box"] = {
+                                    {"x", it.box.x}, {"y", it.box.y}, {"w", it.box.w}, {"h", it.box.h},
+                                    {"score", it.box.score}, {"target", it.box.target}
+                                };
+                                float x1 = (it.box.x - it.box.w / 2.0f) * pre.cols;
+                                float y1 = (it.box.y - it.box.h / 2.0f) * pre.rows;
+                                float x2 = (it.box.x + it.box.w / 2.0f) * pre.cols;
+                                float y2 = (it.box.y + it.box.h / 2.0f) * pre.rows;
+                                sj["box_abs"] = { {"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2} };
+                                sj["mask"] = { {"width", it.mask.width}, {"height", it.mask.height} };
+                                results.push_back(sj);
+                            }
+                        }
+                        if (!results.empty()) {
+                            j["results"] = results;
+                            j["pre_shape"] = { {"w", pre.cols}, {"h", pre.rows} };
+                        }
                     } else {
                         j["tpu_err"] = ret;
                     }
