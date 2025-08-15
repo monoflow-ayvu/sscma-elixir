@@ -15,6 +15,8 @@
 
 #include "base64.hpp"
 #include "json.hpp"
+#include "CLI11.hpp"
+
 extern "C"
 {
 #include <video.h>
@@ -105,14 +107,11 @@ static inline bool startWrapperPipeline()
 static ma::engine::EngineCVI *g_engine = nullptr;
 static ma::Model *g_model = nullptr;
 
-static std::string findModelPath()
-{
-    const char *envPath = std::getenv("MODEL_PATH");
-    if (envPath && *envPath)
-        return std::string(envPath);
-
-    return std::string("/opt/models/default.cvimodel");
-}
+// CLI configuration (visible to frame callback)
+static std::string g_cli_model_path;
+static int g_cli_tpu_delay_ms = 0;
+static bool g_cli_emit_base64 = true;
+static std::chrono::steady_clock::time_point g_last_tpu_time = std::chrono::steady_clock::time_point::min();
 
 static cv::Mat preprocessImage(cv::Mat &image, ma::Model *model)
 {
@@ -144,8 +143,23 @@ static cv::Mat preprocessImage(cv::Mat &image, ma::Model *model)
     return paddedImage;
 }
 
-int main()
+int main(int argc, char** argv)
 {
+    std::string modelPath = "";
+    int tpuDelay = 0;
+    bool base64 = true;
+
+    CLI::App app{"CVITEK ReCamera Frame Capture - Wrapper Pipeline"};
+    app.add_option("-m, --model", modelPath, "Path to the model file")->required();
+    app.add_option("-t, --tpu-delay", tpuDelay, "How fast to process frames in the TPU (in milliseconds)")->default_str("0");
+    app.add_option("-b, --base64", base64, "Output frames as base64. If false, base64 is omitted.")->default_str("true");
+    CLI11_PARSE(app, argc, argv);
+
+    // Copy to globals for callback use
+    g_cli_model_path = modelPath;
+    g_cli_tpu_delay_ms = tpuDelay;
+    g_cli_emit_base64 = base64;
+
     std::cout << "CVITEK ReCamera Frame Capture - Wrapper Pipeline" << std::endl;
     std::cout << "Will capture frames for 1 second and output as base64" << std::endl;
 
@@ -173,6 +187,15 @@ int main()
     std::cout << "Starting capture..." << std::endl;
     std::cout << std::endl;
 
+    // Validate model path exists
+    {
+        std::ifstream f(g_cli_model_path);
+        if (!f.good()) {
+            std::cerr << "Model file not found: " << g_cli_model_path << std::endl;
+            return -1;
+        }
+    }
+
     // Init TPU
     g_engine = new ma::engine::EngineCVI();
     if (g_engine->init() != MA_OK)
@@ -181,16 +204,15 @@ int main()
     }
     else
     {
-        std::string modelPath = findModelPath();
-        if (modelPath.empty())
+        if (g_cli_model_path.empty())
         {
             std::cerr << "no .cvimodel found (set MODEL_PATH or put a model under /userdata/MODEL/)" << std::endl;
         }
         else
         {
-            if (g_engine->load(modelPath.c_str()) != MA_OK)
+            if (g_engine->load(g_cli_model_path.c_str()) != MA_OK)
             {
-                std::cerr << "engine load model failed: " << modelPath << std::endl;
+                std::cerr << "engine load model failed: " << g_cli_model_path << std::endl;
             }
             else
             {
@@ -219,16 +241,29 @@ int main()
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_start_time).count();
         auto elapsed_since_last_frame = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_frame_time).count();
         int idx = g_frame_count.fetch_add(1) + 1;
-        std::string b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
+        std::string b64;
+        if (g_cli_emit_base64) {
+            b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
+        }
 
         nlohmann::json j;
         j["frame_num"] = idx;
         j["elapsed"] = elapsed;
         j["elapsed_since_last_frame"] = elapsed_since_last_frame;
         j["jpeg_size"] = len;
-        // j["base64_str"] = b64;
+        if (g_cli_emit_base64) {
+            j["frame"] = b64;
+        }
 
-        if (g_engine && g_model && g_model->getInputType() == MA_INPUT_TYPE_IMAGE) {
+        bool do_tpu = true;
+        if (g_cli_tpu_delay_ms > 0 && g_last_tpu_time != std::chrono::steady_clock::time_point::min()) {
+            auto since_last = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_last_tpu_time).count();
+            if (since_last < g_cli_tpu_delay_ms) {
+                do_tpu = false;
+            }
+        }
+
+        if (do_tpu && g_engine && g_model && g_model->getInputType() == MA_INPUT_TYPE_IMAGE) {
             try {
                 std::vector<uint8_t> buf(jpeg, jpeg + len);
                 cv::Mat im = cv::imdecode(buf, cv::IMREAD_COLOR);
@@ -289,6 +324,7 @@ int main()
                         }
                         j["tpu"] = tout;
                         j["tpu_elapsed"] = tpu_elapsed;
+                        g_last_tpu_time = now;
                         j["output_type"] = g_model->getOutputType();
                         j["model_name"] = g_model->getName();
                         j["model_type"] = g_model->getType();
@@ -363,15 +399,11 @@ int main()
                                 results.push_back(sj);
                             }
                         }
-                        if (!results.empty()) {
-                            j["results"] = results;
-                            j["pre_shape"] = { {"w", pre.cols}, {"h", pre.rows} };
-                        }
+                        j["results"] = results;
+                        j["pre_shape"] = { {"w", pre.cols}, {"h", pre.rows} };
                     } else {
                         j["tpu_err"] = ret;
                     }
-
-                    g_running.store(false);
                 }
             } catch (...) {
                 j["tpu_err"] = -1;
