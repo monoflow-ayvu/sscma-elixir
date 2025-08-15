@@ -301,7 +301,7 @@ int main(int argc, char** argv)
 
                     if (ret == MA_OK) {
                         auto tpu_now = std::chrono::steady_clock::now();
-                        auto tpu_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tpu_now - g_start_time).count();
+                        auto tpu_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tpu_now - now).count();
                         nlohmann::json tout = nlohmann::json::array();
                         int outs = g_engine->getOutputSize();
                         for (int i = 0; i < outs; ++i) {
@@ -376,7 +376,7 @@ int main(int argc, char** argv)
                                 pj["box_abs"] = { {"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2} };
                                 nlohmann::json pts = nlohmann::json::array();
                                 for (const auto& pt : it.pts) {
-                                    pts.push_back({ {"x", pt.x}, {"y", pt.y} });
+                                    pts.push_back({ {"x", pt.x}, {"y", pt.y}, {"z", pt.z} });
                                 }
                                 pj["keypoints"] = pts;
                                 results.push_back(pj);
