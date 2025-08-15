@@ -263,6 +263,8 @@ int main()
                     }
 
                     if (ret == MA_OK) {
+                        auto tpu_now = std::chrono::steady_clock::now();
+                        auto tpu_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tpu_now - g_start_time).count();
                         nlohmann::json tout = nlohmann::json::array();
                         int outs = g_engine->getOutputSize();
                         for (int i = 0; i < outs; ++i) {
@@ -281,6 +283,7 @@ int main()
                             tout.push_back(tj);
                         }
                         j["tpu"] = tout;
+                        j["tpu_elapsed"] = tpu_elapsed;
                     } else {
                         j["tpu_err"] = ret;
                     }
