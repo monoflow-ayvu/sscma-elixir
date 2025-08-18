@@ -1,2 +1,4 @@
 build/
 .nix-*
+compile_commands.json
+

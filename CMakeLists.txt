@@ -6,7 +6,7 @@ if("$ENV{SG200X_SDK_PATH}" STREQUAL "")
   message(FATAL_ERROR "ERROR: SG200X_SDK_PATH environment variable is not defined. Please set it before running CMake.")
 endif()
 
-project(helloworld C CXX)
+project(sscma-elixir C CXX)
 
 get_filename_component(PROJECT_DIR ${CMAKE_CURRENT_LIST_DIR} ABSOLUTE)
 

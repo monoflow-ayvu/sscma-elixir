@@ -121,17 +121,11 @@ let
       
       echo "🚀 SG200X FHS Development Environment Ready!"
       echo "📁 SDK Path: $SG200X_SDK_PATH"
-      echo "🔧 Cross-compiler tools available in PATH"
-      echo "🛠️  CMake Toolchain: $CMAKE_TOOLCHAIN_FILE"
-      echo "📋 CC: $CC ($(which $CC 2>/dev/null || echo 'not found'))"
-      echo "📋 CXX: $CXX ($(which $CXX 2>/dev/null || echo 'not found'))"
       echo ""
       echo "💡 To configure the project, run:"
       echo "   cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-riscv64-linux-musl-x86_64.cmake"
-      echo ""
-      echo "🏠 Current directory: $(pwd)"
-      echo "🌐 FHS Environment: /usr, /bin, /lib are available as expected"
-      echo "📁 SDK available at: $SG200X_SDK_PATH"
+      echo "🛠️ To build the project, run:"
+      echo "   cmake --build build --config Release"
     '';
   };
 
