@@ -30,9 +30,10 @@ let
     '';
   };
 
-  # Create the FHS environment
+  # Create the FHS environment (interactive shell inside it)
   fhsEnv = pkgs.buildFHSEnv {
     name = "sg200x-dev";
+    runScript = "${pkgs.bashInteractive}/bin/bash";
 
     targetPkgs = pkgs: (with pkgs; [
       # Build essentials
@@ -58,7 +59,7 @@ let
 
       # Basic system tools
       coreutils
-      bash
+      bashInteractive
       which
 
       # Libraries needed by cross-compiler
@@ -74,7 +75,11 @@ let
       stdenv.cc.cc.lib
     ];
 
+    extraBwrapArgs = [ ];
+
     profile = ''
+      # Set the environment variable to indicate that this is a FHS environment
+      export SG200X_FHS=1
       # Setup SDK and host-tools if not present
       RECAMERA_ROOT="$HOME/.nix-fhs-recamera"
       if [ ! -d "$RECAMERA_ROOT/sg2002_recamera_emmc" ]; then
@@ -124,14 +129,6 @@ let
       echo "   cmake --build build --config Release"
     '';
   };
-
-in pkgs.mkShell {
-  buildInputs = [ fhsEnv ];
-
-  shellHook = ''
-    echo "🔄 Entering SG200X FHS Development Environment..."
-    echo "🚀 FHS environment available as 'sg200x-dev' command"
-    echo "💡 Run 'sg200x-dev' to enter the cross-compilation environment"
-    echo ""
-  '';
-}
+in
+  # Drop directly into the FHS environment as your dev shell
+  fhsEnv.env
