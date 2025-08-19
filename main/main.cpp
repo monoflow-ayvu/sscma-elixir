@@ -56,17 +56,52 @@ void signalHandler(int signal)
     g_running.store(false);
 }
 
-// Ensure video deinitialization on normal program exit
+// Ensure comprehensive cleanup on program exit
 static void onExitCleanup()
 {
+    std::cout << "Exit cleanup: performing final video system reset..." << std::endl;
     deinitVideo();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+
+// Enhanced cleanup function to force reset video pipeline state
+static void forceVideoSystemReset()
+{
+    std::cout << "Performing comprehensive video system reset..." << std::endl;
+    
+    // Try multiple cleanup attempts with delays
+    for (int attempt = 0; attempt < 3; attempt++)
+    {
+        std::cout << "Cleanup attempt " << (attempt + 1) << "/3" << std::endl;
+        deinitVideo();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // Force try to destroy potential lingering VPSS groups
+        try {
+            for (int grp = 0; grp < 4; grp++) {  // Try common group numbers
+                // Try to stop and destroy directly, ignore errors
+                CVI_VPSS_StopGrp(grp);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                CVI_VPSS_DestroyGrp(grp);
+            }
+        } catch (...) {
+            // Ignore any exceptions from forced cleanup
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+    
+    // Final longer delay for hardware to fully settle
+    std::cout << "Waiting for hardware to settle..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 }
 
 // Wrapper helpers
 static inline bool startWrapperPipeline()
 {
-    // Mirror example: ensure clean state, then init, setup, register, start with small delays
-    deinitVideo();
+    // Enhanced cleanup: force reset multiple times with delays
+    forceVideoSystemReset();
+    
     if (initVideo() != 0)
     {
         std::cerr << "initVideo failed" << std::endl;
@@ -96,10 +131,30 @@ static inline bool startWrapperPipeline()
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    if (startVideo() != 0)
+    
+    // Try starting video with retry mechanism
+    int video_start_attempts = 3;
+    for (int attempt = 1; attempt <= video_start_attempts; attempt++)
     {
-        std::cerr << "startVideo failed. Trying to continue anyway." << std::endl;
+        std::cout << "Starting video system (attempt " << attempt << "/" << video_start_attempts << ")..." << std::endl;
+        
+        if (startVideo() == 0)
+        {
+            std::cout << "Video system started successfully!" << std::endl;
+            return true;
+        }
+        
+        std::cerr << "startVideo attempt " << attempt << " failed." << std::endl;
+        
+        if (attempt < video_start_attempts)
+        {
+            std::cerr << "Performing additional cleanup before retry..." << std::endl;
+            deinitVideo();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
     }
+    
+    std::cerr << "All startVideo attempts failed. Continuing anyway to attempt frame capture..." << std::endl;
     return true;
 }
 
@@ -174,8 +229,9 @@ int main(int argc, char** argv)
     signal(SIGQUIT, signalHandler);
     signal(SIGABRT, signalHandler);
 
-    // Ensure wrapper state is clean
-    deinitVideo();
+    // Comprehensive initial cleanup - force reset any lingering state
+    std::cout << "Performing initial system cleanup..." << std::endl;
+    forceVideoSystemReset();
     std::atexit(onExitCleanup);
 
     // Start wrapper pipeline (working reference from example)
@@ -187,7 +243,7 @@ int main(int argc, char** argv)
     }
     std::cout << std::endl
               << "=== WRAPPER PIPELINE READY ===" << std::endl;
-    std::cout << "Channels: CH0 H264 1920x1080@15, CH1 JPEG 640x480@15" << std::endl;
+    std::cout << "Channels: CH1 JPEG 640x480@15" << std::endl;
     std::cout << "Starting capture..." << std::endl;
     std::cout << std::endl;
 
@@ -235,11 +291,45 @@ int main(int argc, char** argv)
         static int warm = 0;
         VENC_STREAM_S* s = (VENC_STREAM_S*)pData;
         if (!s || s->u32PackCount == 0) return 0;
-        VENC_PACK_S* pack = &s->pstPack[0];
-        uint8_t* jpeg = pack->pu8Addr + pack->u32Offset;
-        uint32_t len = pack->u32Len - pack->u32Offset;
-        if (!jpeg || len == 0) return 0;
         if (warm < 30) { warm++; return 0; }
+        
+        // Calculate total frame size across all packs
+        uint32_t total_len = 0;
+        for (uint32_t i = 0; i < s->u32PackCount; i++) {
+            VENC_PACK_S* pack = &s->pstPack[i];
+            if (!pack->pu8Addr || pack->u32Len <= pack->u32Offset) {
+                std::cerr << "Invalid pack " << i << " in stream" << std::endl;
+                return 0;
+            }
+            total_len += (pack->u32Len - pack->u32Offset);
+        }
+        
+        if (total_len == 0) {
+            std::cerr << "No valid frame data found" << std::endl;
+            return 0;
+        }
+        
+        // Allocate buffer for complete frame
+        std::vector<uint8_t> frame_data;
+        frame_data.reserve(total_len);
+        
+        // Concatenate all packs into single frame
+        for (uint32_t i = 0; i < s->u32PackCount; i++) {
+            VENC_PACK_S* pack = &s->pstPack[i];
+            uint8_t* pack_data = pack->pu8Addr + pack->u32Offset;
+            uint32_t pack_len = pack->u32Len - pack->u32Offset;
+            frame_data.insert(frame_data.end(), pack_data, pack_data + pack_len);
+        }
+        
+        uint8_t* jpeg = frame_data.data();
+        uint32_t len = frame_data.size();
+        
+        // Validate JPEG header (should start with 0xFF 0xD8)
+        if (len < 2 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) {
+            std::cerr << "Invalid JPEG header. First bytes: " << std::hex 
+                     << (int)jpeg[0] << " " << (int)jpeg[1] << std::dec << std::endl;
+            return 0;
+        }
 
         auto now = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_start_time).count();
@@ -247,7 +337,15 @@ int main(int argc, char** argv)
         int idx = g_frame_count.fetch_add(1) + 1;
         std::string b64;
         if (g_cli_emit_base64) {
-            b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
+            try {
+                b64 = macaron::Base64::Encode(std::string(reinterpret_cast<char*>(jpeg), len));
+                if (b64.empty()) {
+                    std::cerr << "Base64 encoding failed for frame " << idx << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Base64 encoding exception for frame " << idx << ": " << e.what() << std::endl;
+                b64 = "";
+            }
         }
 
         nlohmann::json j;
@@ -255,8 +353,12 @@ int main(int argc, char** argv)
         j["elapsed"] = elapsed;
         j["elapsed_since_last_frame"] = elapsed_since_last_frame;
         j["jpeg_size"] = len;
-        if (g_cli_emit_base64) {
+        j["pack_count"] = s->u32PackCount;
+        j["total_packs_size"] = total_len;
+        if (g_cli_emit_base64 && !b64.empty()) {
             j["frame"] = b64;
+        } else if (g_cli_emit_base64) {
+            j["frame_error"] = "base64_encoding_failed";
         }
 
         bool do_tpu = true;
@@ -433,17 +535,27 @@ int main(int argc, char** argv)
     std::cout << std::endl
               << "=== CAPTURE COMPLETED ===" << std::endl;
 
-    std::cout << "Cleaning up video system..." << std::endl;
-    deinitVideo();
-
+    std::cout << "Performing comprehensive cleanup..." << std::endl;
+    
+    // Clean up TPU resources first
     if (g_model)
     {
         ma::ModelFactory::remove(g_model);
         g_model = nullptr;
     }
-    delete g_engine;
-    g_engine = nullptr;
-
+    if (g_engine) 
+    {
+        delete g_engine;
+        g_engine = nullptr;
+    }
+    
+    // Comprehensive video system cleanup
+    std::cout << "Cleaning up video system..." << std::endl;
+    deinitVideo();
+    
+    // Additional delay and force cleanup to ensure clean state for next run
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
     std::cout << "Program finished successfully." << std::endl;
     return 0;
 }
