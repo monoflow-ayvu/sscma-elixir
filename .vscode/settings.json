@@ -78,5 +78,6 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp",
         "valarray": "cpp"
-    }
+    },
+    "nixEnvSelector.nixFile": "${workspaceFolder}/shell.nix"
 }

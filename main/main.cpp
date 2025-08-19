@@ -111,6 +111,7 @@ static ma::Model *g_model = nullptr;
 static std::string g_cli_model_path;
 static int g_cli_tpu_delay_ms = 0;
 static bool g_cli_emit_base64 = true;
+static bool g_cli_single_mode = false;
 static std::chrono::steady_clock::time_point g_last_tpu_time = std::chrono::steady_clock::time_point::min();
 
 static cv::Mat preprocessImage(cv::Mat &image, ma::Model *model)
@@ -148,17 +149,20 @@ int main(int argc, char** argv)
     std::string modelPath = "";
     int tpuDelay = 0;
     bool base64 = true;
+    bool singleMode = false;
 
     CLI::App app{"CVITEK ReCamera Frame Capture - Wrapper Pipeline"};
     app.add_option("-m, --model", modelPath, "Path to the model file")->required();
     app.add_option("-t, --tpu-delay", tpuDelay, "How fast to process frames in the TPU (in milliseconds)")->default_str("0");
     app.add_option("-b, --base64", base64, "Output frames as base64. If false, base64 is omitted.")->default_str("true");
+    app.add_option("-s, --single", singleMode, "Exit after one successful frame with TPU data")->default_str("false");
     CLI11_PARSE(app, argc, argv);
 
     // Copy to globals for callback use
     g_cli_model_path = modelPath;
     g_cli_tpu_delay_ms = tpuDelay;
     g_cli_emit_base64 = base64;
+    g_cli_single_mode = singleMode;
 
     std::cout << "CVITEK ReCamera Frame Capture - Wrapper Pipeline" << std::endl;
     std::cout << "Will capture frames for 1 second and output as base64" << std::endl;
@@ -401,6 +405,11 @@ int main(int argc, char** argv)
                         }
                         j["results"] = results;
                         j["pre_shape"] = { {"w", pre.cols}, {"h", pre.rows} };
+                        
+                        // Exit after one successful frame in single mode
+                        if (g_cli_single_mode) {
+                            g_running.store(false);
+                        }
                     } else {
                         j["tpu_err"] = ret;
                     }
