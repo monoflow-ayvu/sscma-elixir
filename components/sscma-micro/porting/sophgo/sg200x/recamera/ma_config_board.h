@@ -21,6 +21,7 @@
 #define MA_USE_TRANSPORT_MQTT           1
 #define MA_SEVER_AT_EXECUTOR_STACK_SIZE 80 * 1024
 #define MA_SEVER_AT_EXECUTOR_TASK_PRIO  2
+#define MA_DEBUG_LEVEL                  5
 
 #define ma_malloc                       malloc
 #define ma_calloc                       calloc
