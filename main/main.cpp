@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
                     std::string jpeg_data(reinterpret_cast<char*>(jpeg_buffer.data()), jpeg_buffer.size());
                     std::string base64_image = macaron::Base64::Encode(jpeg_data);
                     
-                    printf("Frame %d JPEG (base64): data:image/jpeg;base64,%s\n", frame_count, base64_image.c_str());
+                    // printf("Frame %d JPEG (base64): data:image/jpeg;base64,%s\n", frame_count, base64_image.c_str());
                 } else {
                     printf("Frame %d: JPEG encoding failed\n", frame_count);
                 }
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
-        // fflush(stdout);
+        fflush(stdout);
     }
 
     camera->stopStream();
