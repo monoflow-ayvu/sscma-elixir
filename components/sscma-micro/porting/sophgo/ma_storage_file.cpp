@@ -32,7 +32,7 @@ ma_err_t StorageFile::init(const void* config) noexcept {
         file << "{}";
         file.close();
     }
-    if (access(filename_.c_str(), R_OK | W_OK) != 0) {
+    if (access(filename_.c_str(), R_OK) != 0) {
         MA_LOGE(TAG, "Failed to access file %s", filename_.c_str());
         return MA_EINVAL;
     }
