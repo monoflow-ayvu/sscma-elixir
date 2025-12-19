@@ -3,6 +3,10 @@
 #include <thread>
 #include <iterator>
 #include <vector>
+#include <algorithm>
+#include <cstring>
+
+#include <opencv2/opencv.hpp>
 
 #include <sscma.h>
 #include <video.h>
@@ -80,22 +84,13 @@ int main(int argc, char** argv) {
             camera->init(0);
             Camera::CtrlValue value;
             
-            // Configure RAW channel (0) for RGB888 inference
+            // Configure RAW channel (0) for RGB888 inference and JPEG encoding
             value.i32 = 0;
             camera->commandCtrl(Camera::CtrlType::kChannel, Camera::CtrlMode::kWrite, value);
             value.u16s[0] = input_width;
             value.u16s[1] = input_height;
             camera->commandCtrl(Camera::CtrlType::kWindow, Camera::CtrlMode::kWrite, value);
             value.i32 = static_cast<int>(MA_PIXEL_FORMAT_RGB888);
-            camera->commandCtrl(Camera::CtrlType::kFormat, Camera::CtrlMode::kWrite, value);
-            
-            // Configure JPEG channel (1) for base64 output
-            value.i32 = 1;
-            camera->commandCtrl(Camera::CtrlType::kChannel, Camera::CtrlMode::kWrite, value);
-            value.u16s[0] = input_width;
-            value.u16s[1] = input_height;
-            camera->commandCtrl(Camera::CtrlType::kWindow, Camera::CtrlMode::kWrite, value);
-            value.i32 = static_cast<int>(MA_PIXEL_FORMAT_JPEG);
             camera->commandCtrl(Camera::CtrlType::kFormat, Camera::CtrlMode::kWrite, value);
             
             // value.i32 = 1;
@@ -118,6 +113,11 @@ int main(int argc, char** argv) {
         ma_img_t frame;
         if (camera->retrieveFrame(frame, MA_PIXEL_FORMAT_RGB888) == MA_OK) {
             auto capture_start = std::chrono::high_resolution_clock::now();
+
+            // Copy frame data for JPEG encoding (before frame is returned by callback)
+            size_t frame_data_size = frame.width * frame.height * 3; // RGB888 = 3 bytes per pixel
+            std::vector<uint8_t> frame_data_copy(frame_data_size);
+            memcpy(frame_data_copy.data(), frame.data, frame_data_size);
 
             ma_tensor_t tensor = {
                 .size        = frame.size,
@@ -161,18 +161,29 @@ int main(int argc, char** argv) {
                     printf("Average processing time per frame: %.2f ms (over %d frames)\n", avg_time, frame_count);
                 }
 
-                // Convert frame to JPEG and encode as base64
-                ma_img_t jpeg_frame;
-                if (camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG) == MA_OK) {
+                // Convert RGB frame to JPEG using OpenCV and encode as base64
+                // Use the copied frame data (copied before callback returns frame)
+                // Use ::cv:: to explicitly refer to OpenCV namespace (avoid conflict with ma::cv)
+                ::cv::Mat rgb_mat(frame.height, frame.width, CV_8UC3, frame_data_copy.data());
+                
+                // Convert RGB to BGR for OpenCV (OpenCV uses BGR by default)
+                ::cv::Mat bgr_mat;
+                ::cv::cvtColor(rgb_mat, bgr_mat, ::cv::COLOR_RGB2BGR);
+                
+                // Encode as JPEG with high quality (90)
+                std::vector<uint8_t> jpeg_buffer;
+                std::vector<int> compression_params;
+                compression_params.push_back(::cv::IMWRITE_JPEG_QUALITY);
+                compression_params.push_back(90);
+                
+                if (::cv::imencode(".jpg", bgr_mat, jpeg_buffer, compression_params)) {
                     // Encode JPEG to base64
-                    std::string jpeg_data(reinterpret_cast<char*>(jpeg_frame.data), jpeg_frame.size);
+                    std::string jpeg_data(reinterpret_cast<char*>(jpeg_buffer.data()), jpeg_buffer.size());
                     std::string base64_image = macaron::Base64::Encode(jpeg_data);
                     
                     printf("Frame %d JPEG (base64): data:image/jpeg;base64,%s\n", frame_count, base64_image.c_str());
-                    
-                    camera->returnFrame(jpeg_frame);
                 } else {
-                    printf("Frame %d: JPEG retrieval failed\n", frame_count);
+                    printf("Frame %d: JPEG encoding failed\n", frame_count);
                 }
             } else {
                 MA_LOGW(TAG, "Model output type not supported for detection, only bbox supported in this example");
@@ -182,7 +193,7 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
 
-        fflush(stdout);
+        // fflush(stdout);
     }
 
     camera->stopStream();
