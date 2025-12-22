@@ -458,6 +458,7 @@ int main(int argc, char **argv) {
       }
 
       std::cout << j.dump() << std::endl;
+      std::cout.flush();
       last_frame_time = now;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
