@@ -9,6 +9,9 @@
     gcc
     pkg-config
     ninja
+    clang
+    clang-tools
+    ccls
 
     # Additional tools
     git

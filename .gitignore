@@ -13,3 +13,8 @@ devenv.local.yaml
 
 # pre-commit
 .pre-commit-config.yaml
+
+
+# ccls related
+.ccls-cache
+.cache

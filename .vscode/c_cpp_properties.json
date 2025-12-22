@@ -1,40 +1,24 @@
 {
     "configurations": [
         {
-            "name": "Linux",
-            "includePath": [
-                "${default}",
-                "${workspaceFolder}/**",
-                "${workspaceFolder}/components/sscma-micro/sscma-micro/sscma",
-                "${workspaceFolder}/components/sscma-micro/porting/sophgo",
-                "${workspaceFolder}/components/sscma-micro/porting/sophgo/sg200x",
-                "${workspaceFolder}/components/sscma-micro/porting/sophgo/sg200x/recamera",
-                "${workspaceFolder}/main",
-                "${workspaceFolder}/main/node",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_ai_sdk/sample/3rd/rtsp/include/cvi_rtsp",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/liveMedia",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/groupsock",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/UsageEnvironment",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/BasicUsageEnvironment",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/sysroot/usr/include",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/buildroot-2021.05/output/cvitek_CV181X_musl_riscv64/host/riscv64-buildroot-linux-musl/sysroot/usr/include",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/include",
-                "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/riscv64-unknown-linux-musl/include/c++/10.2.0"
-            ],
-            "defines": [
-                "CONFIG_MA_ENGINE_CVINN=1"
-            ],
-            "compilerPath": "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-gcc",
-            "compilerArgs": [
-                "--sysroot=${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/sysroot",
-                "-march=rv64gcv_zfh",
-                "-mabi=lp64d"
-            ],
+            "name": "SG200X Cross-Compilation",
+            "compileCommands": "${workspaceFolder}/compile_commands.json",
+            "compilerPath": "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-g++",
             "cStandard": "c17",
-            "cppStandard": "c++17",
-            "intelliSenseMode": "linux-gcc-x64",
-            "compileCommands": "${workspaceFolder}/compile_commands.json"
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-riscv64",
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "defines": [
+                "NDEBUG",
+                "CONFIG_MA_ENGINE_CVINN=1"
+            ]
         }
     ],
     "version": 4

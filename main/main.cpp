@@ -83,21 +83,34 @@ int main(int argc, char **argv) {
 
   for (auto &sensor : device->getSensors()) {
     if (sensor->getType() == ma::Sensor::Type::kCamera) {
+      ma_err_t ret;
       camera = static_cast<Camera *>(sensor);
       camera->init(0);
       Camera::CtrlValue value;
 
       // Configure RAW channel (0) for RGB888 inference and JPEG encoding
       value.i32 = 0;
-      camera->commandCtrl(Camera::CtrlType::kChannel, Camera::CtrlMode::kWrite,
+      ret = camera->commandCtrl(Camera::CtrlType::kChannel, Camera::CtrlMode::kWrite,
                           value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kChannel failed");
+        return 1;
+      }
       value.u16s[0] = input_width;
       value.u16s[1] = input_height;
-      camera->commandCtrl(Camera::CtrlType::kWindow, Camera::CtrlMode::kWrite,
+      ret = camera->commandCtrl(Camera::CtrlType::kWindow, Camera::CtrlMode::kWrite,
                           value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kWindow failed");
+        return 1;
+      }
       value.i32 = static_cast<int>(MA_PIXEL_FORMAT_RGB888);
-      camera->commandCtrl(Camera::CtrlType::kFormat, Camera::CtrlMode::kWrite,
+      ret = camera->commandCtrl(Camera::CtrlType::kFormat, Camera::CtrlMode::kWrite,
                           value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFormat failed");
+        return 1;
+      }
 
       // value.i32 = 1;
       // camera->commandCtrl(Camera::CtrlType::kPhysical,
