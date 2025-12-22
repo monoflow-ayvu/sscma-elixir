@@ -9,6 +9,10 @@
     "cmake.configureEnvironment": {
         "SG200X_SDK_PATH": "${env:SG200X_SDK_PATH}"
     },
+    "cmake.configureArgs": [
+        "-Wno-deprecated",
+        "-Wno-dev"
+    ],
     "files.associations": {
         "*.json": "json",
         "*.h": "cpp",
