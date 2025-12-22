@@ -1,13 +1,10 @@
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 #include <thread>
-#include <vector>
 
 #include <opencv2/opencv.hpp>
 
@@ -37,19 +34,24 @@ static bool g_cli_single_mode = false;
 static float g_cli_threshold = 0.5f;
 
 int main(int argc, char **argv) {
-  std::string modelPath = {0};
+  std::string modelPath;
   int tpuDelay = 0;
   bool base64 = true;
   bool singleMode = false;
   float threshold = 0.5f;
 
-  CLI::App app{"CVITEK ReCamera Frame Capture - New Camera API"};
-  app.add_option("-m, --model", modelPath, "Path to the model file")->required();
-  app.add_option("-t, --tpu-delay", tpuDelay, "How fast to process frames in the TPU (in milliseconds)")->default_str("0");
-  app.add_option("-b, --base64", base64, "Output frames as base64. If false, base64 is omitted.")->default_str("true");
-  app.add_option("-s, --single", singleMode, "Exit after one successful frame with TPU data")->default_str("false");
+  CLI::App app;
+  app.add_option("-m,--model", modelPath, "Path to the model file")->required();
+  app.add_option("-t,--tpu-delay", tpuDelay, "How fast to process frames in the TPU (in milliseconds)")->default_str("0");
+  app.add_option("-b,--base64", base64, "Output frames as base64. If false, base64 is omitted.")->default_str("true");
+  app.add_option("-s,--single", singleMode, "Exit after one successful frame with TPU data")->default_str("false");
   app.add_option("--threshold", threshold, "Detection threshold")->default_str("0.5");
-  CLI11_PARSE(app, argc, argv);
+  
+  try {
+    app.parse(argc, argv);
+  } catch (const CLI::ParseError &e) {
+    return app.exit(e);
+  }
 
   // Copy to globals for use
   g_cli_model_path = modelPath;

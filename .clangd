@@ -1,0 +1,25 @@
+CompileFlags:
+  # Point to the directory containing compile_commands.json
+  CompilationDatabase: .
+
+  # Allow clangd to query the cross-compiler for its built-in system includes
+  # We use a glob pattern to stay portable across different developer machines
+  QueryDriver:
+    - "*/riscv64-unknown-linux-musl-g++"
+    - "*/riscv64-unknown-linux-musl-gcc"
+
+  Add:
+    # CRITICAL: Tell clang to emulate the RISC-V target so headers parse correctly
+    - --target=riscv64-unknown-linux-musl
+    - -std=gnu++17
+    - -Wno-unused-command-line-argument
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+  Suppress:
+    # Optional: Suppress the CLI11 overload resolution error if it's still a false positive
+    - ovl_no_viable_member_function_in_call
+
+Index:
+  Background: Build

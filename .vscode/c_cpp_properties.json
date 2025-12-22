@@ -13,11 +13,14 @@
                     "${workspaceFolder}",
                     "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc"
                 ],
-                "limitSymbolsToIncludedHeaders": true
+                "limitSymbolsToIncludedHeaders": false
             },
             "defines": [
                 "NDEBUG",
                 "CONFIG_MA_ENGINE_CVINN=1"
+            ],
+            "compilerArgs": [
+                "-std=gnu++17"
             ]
         }
     ],
