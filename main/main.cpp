@@ -176,7 +176,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  camera->startStream(Camera::StreamMode::kRefreshOnReturn);
+  ret = camera->startStream(Camera::StreamMode::kRefreshOnReturn);
+  if (ret != MA_OK) {
+    MA_LOGE(TAG, "camera startStream failed");
+    return 1;
+  }
 
   g_start_time = std::chrono::steady_clock::now();
   last_frame_time = g_start_time;
