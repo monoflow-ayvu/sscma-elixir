@@ -26,6 +26,8 @@ jobs:
         run: nix profile install nixpkgs#devenv
       - name: Restore nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Setup SDK
+        run: devenv tasks run sg200x:setup-sdk --verbose
       - name: Prepare project
         run: devenv shell prepare
       - name: Build project
