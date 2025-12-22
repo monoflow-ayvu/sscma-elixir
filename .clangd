@@ -11,5 +11,3 @@ Diagnostics:
   Suppress:
     # CVI SDK fails to build with this warning
     - -Wreserved-user-defined-literal
-  ClangTidy:
-    Remove: '*'

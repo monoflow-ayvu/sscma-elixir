@@ -121,12 +121,16 @@ int main(int argc, char **argv) {
         exit(0);
       });
 
+  ret = MA_OK;
+  Camera::CtrlValue value;
   for (auto &sensor : device->getSensors()) {
     if (sensor->getType() == ma::Sensor::Type::kCamera) {
-      ma_err_t ret;
       camera = static_cast<Camera *>(sensor);
-      camera->init(0);
-      Camera::CtrlValue value;
+      ret = camera->init(0);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "camera init failed");
+        return 1;
+      }
 
       // Configure RAW channel (0) for RGB888 inference and JPEG encoding
       value.i32 = 0;
