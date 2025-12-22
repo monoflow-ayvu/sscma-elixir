@@ -81,5 +81,11 @@
         "typeinfo": "cpp",
         "valarray": "cpp"
     },
-    "nixEnvSelector.nixFile": "${workspaceFolder}/shell.nix"
+    "nixEnvSelector.nixFile": "${workspaceFolder}/shell.nix",
+    "clangd.arguments": [
+        "--query-driver=${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/bin/*",
+        "--compile-commands-dir=${workspaceFolder}",
+        "--background-index",
+        "--header-insertion=never"
+    ]
 }
