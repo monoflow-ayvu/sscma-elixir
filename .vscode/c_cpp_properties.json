@@ -11,23 +11,24 @@
                 "${workspaceFolder}/components/sscma-micro/porting/sophgo/sg200x/recamera",
                 "${workspaceFolder}/main",
                 "${workspaceFolder}/main/node",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_ai_sdk/sample/3rd/rtsp/include/cvi_rtsp",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/liveMedia",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/groupsock",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/UsageEnvironment",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/BasicUsageEnvironment",
-                "${env:HOME}/recamera/sg2002_recamera_emmc/buildroot-2021.05/output/cvitek_CV181X_musl_riscv64/host/riscv64-buildroot-linux-musl/sysroot/usr/include",
-                "${env:HOME}/recamera/host-tools/gcc/riscv64-linux-musl-x86_64/include"
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_ai_sdk/sample/3rd/rtsp/include/cvi_rtsp",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/liveMedia",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/groupsock",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/UsageEnvironment",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/install/soc_sg2002_recamera_emmc/tpu_musl_riscv64/cvitek_tpu_sdk/include/BasicUsageEnvironment",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc/buildroot-2021.05/output/cvitek_CV181X_musl_riscv64/host/riscv64-buildroot-linux-musl/sysroot/usr/include",
+                "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/include"
             ],
             "defines": [
                 "CONFIG_MA_ENGINE_CVINN=1"
             ],
-            "compilerPath": "${env:HOME}/recamera/host-tools/gcc/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-gcc",
+            "compilerPath": "${workspaceFolder}/.devenv/state/sg200x-sdk/host-tools/gcc/riscv64-linux-musl-x86_64/bin/riscv64-unknown-linux-musl-gcc",
             "cStandard": "c17",
             "cppStandard": "c++17",
             "intelliSenseMode": "linux-gcc-x64",
-            "configurationProvider": "ms-vscode.cmake-tools"
+            "configurationProvider": "ms-vscode.cmake-tools",
+            "compileCommands": "${workspaceFolder}/compile_commands.json"
         }
     ],
     "version": 4

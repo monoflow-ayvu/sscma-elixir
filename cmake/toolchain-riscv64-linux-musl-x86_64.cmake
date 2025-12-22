@@ -29,12 +29,18 @@ endif()
 # To build the tests, we need to set where the target environment containing
 # the required library is. On Debian-like systems, this is
 # /usr/riscv64-unknown-linux-gnu-.
-set(CMAKE_FIND_ROOT_PATH ${RISCV_SYSROOT_PATH})
-# search for programs in the build host directories
-set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-# for libraries and headers in the target directories
-set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+# Set sysroot path if not already set (will be set in project.cmake)
+if(NOT DEFINED RISCV_SYSROOT_PATH AND DEFINED SG200X_SDK_PATH)
+    set(RISCV_SYSROOT_PATH "${SG200X_SDK_PATH}/buildroot-2021.05/output/cvitek_CV181X_musl_riscv64/host/riscv64-buildroot-linux-musl/sysroot")
+endif()
+if(DEFINED RISCV_SYSROOT_PATH)
+    set(CMAKE_FIND_ROOT_PATH ${RISCV_SYSROOT_PATH})
+    # search for programs in the build host directories
+    set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+    # for libraries and headers in the target directories
+    set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+    set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+endif()
 
 # We must set the OBJCOPY setting into cache so that it's available to the
 # whole project. Otherwise, this does not get set into the CACHE and therefore
@@ -45,7 +51,5 @@ set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS}" CACHE STRING "" )
 set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" )
 set( CMAKE_ASM_FLAGS "${CMAKE_C_FLAGS}" CACHE STRING "" )
 
-set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mcpu=c906fdv" )
-set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mcpu=c906fdv" )
-set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=rv64gcv0p7_zfh_xthead -mabi=lp64d" )
-set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv64gcv0p7_zfh_xthead -mabi=lp64d" ) 
+set( CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=rv64gcv_zfh -mabi=lp64d" )
+set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=rv64gcv_zfh -mabi=lp64d" )
