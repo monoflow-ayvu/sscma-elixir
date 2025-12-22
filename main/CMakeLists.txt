@@ -11,6 +11,6 @@ component_register(
     COMPONENT_NAME main
     SRCS ${srcs}
     INCLUDE_DIRS ${incs}
-    PRIVATE_REQUIREDS sscma-micro cvi_rtsp
+    PRIVATE_REQUIREDS sscma-micro cvi_rtsp hv
     REQUIREDS opencv_core opencv_imgcodecs opencv_imgproc
 )

@@ -11,6 +11,8 @@
 #include <sscma.h>
 #include <video.h>
 
+#include <hv/requests.h>
+
 #include "CLI11.hpp"
 #include "base64.hpp"
 #include "json.hpp"
@@ -34,6 +36,7 @@ static bool g_cli_emit_base64 = true;
 static bool g_cli_single_mode = false;
 static float g_cli_threshold = 0.5f;
 static bool g_cli_base64_payload = false;
+static std::string g_cli_publish_http_url;
 
 int main(int argc, char **argv) {
   std::string modelPath;
@@ -42,6 +45,7 @@ int main(int argc, char **argv) {
   bool singleMode = false;
   float threshold = 0.5f;
   bool base64Payload = false;
+  std::string publishHttpUrl;
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
@@ -59,6 +63,9 @@ int main(int argc, char **argv) {
   app.add_option("--base64-payload", base64Payload,
                  "Encode entire JSON payload as base64")
       ->default_str("false");
+  app.add_option("--publish-http-to", publishHttpUrl,
+                 "HTTP URL to POST JSON payload to")
+      ->default_str("");
 
   try {
     app.parse(argc, argv);
@@ -73,6 +80,7 @@ int main(int argc, char **argv) {
   g_cli_single_mode = singleMode;
   g_cli_threshold = threshold;
   g_cli_base64_payload = base64Payload;
+  g_cli_publish_http_url = publishHttpUrl;
 
   // Validate model path exists
   {
@@ -286,8 +294,9 @@ int main(int argc, char **argv) {
           tensor.data.data = reinterpret_cast<void *>(frame.data);
 
           engine->setInput(0, tensor);
-          model->setPreprocessDone(
-              [camera, frame](void *ctx) mutable { camera->returnFrame(frame); });
+          model->setPreprocessDone([camera, frame](void *ctx) mutable {
+            camera->returnFrame(frame);
+          });
 
           ma_err_t ret = MA_OK;
           ma::model::Classifier *classifier = nullptr;
@@ -463,14 +472,33 @@ int main(int argc, char **argv) {
         camera->returnFrame(frame);
       }
 
+      // Prepare JSON string
+      std::string json_str = j.dump();
+
+      // Output to stdout
       if (g_cli_base64_payload) {
-        std::string json_str = j.dump();
         std::string encoded = macaron::Base64::Encode(json_str);
         std::cout << encoded << std::endl;
       } else {
-        std::cout << j.dump() << std::endl;
+        std::cout << json_str << std::endl;
       }
       std::cout.flush();
+
+      // Publish to HTTP if URL is provided
+      if (!g_cli_publish_http_url.empty()) {
+        http_headers headers;
+        headers["Content-Type"] = "application/json";
+        auto resp =
+            requests::post(g_cli_publish_http_url.c_str(), json_str, headers);
+        if (resp == NULL) {
+          MA_LOGW(TAG, "HTTP POST to %s failed",
+                  g_cli_publish_http_url.c_str());
+        } else if (resp->status_code >= 400) {
+          MA_LOGW(TAG, "HTTP POST to %s returned status %d",
+                  g_cli_publish_http_url.c_str(), resp->status_code);
+        }
+      }
+
       last_frame_time = now;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
