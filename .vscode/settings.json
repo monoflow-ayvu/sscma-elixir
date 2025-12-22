@@ -3,9 +3,11 @@
     "cmake.configureOnEdit": true,
     "cmake.copyCompileCommands": "${workspaceFolder}/compile_commands.json",
     "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
+    "cmake.configureSettings": {
+        "CMAKE_TOOLCHAIN_FILE": "${env:CMAKE_TOOLCHAIN_FILE}"
+    },
     "cmake.configureEnvironment": {
-        "SG200X_SDK_PATH": "${env:HOME}/recamera/sg2002_recamera_emmc/",
-        "PATH": "${env:HOME}/recamera/host-tools/gcc/riscv64-linux-musl-x86_64/bin:${env:PATH}"
+        "SG200X_SDK_PATH": "${env:SG200X_SDK_PATH}"
     },
     "files.associations": {
         "*.json": "json",

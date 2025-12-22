@@ -29,12 +29,12 @@ endif()
 # To build the tests, we need to set where the target environment containing
 # the required library is. On Debian-like systems, this is
 # /usr/riscv64-unknown-linux-gnu-.
-SET(CMAKE_FIND_ROOT_PATH ${ARM_SYSROOT_PATH})
+set(CMAKE_FIND_ROOT_PATH ${RISCV_SYSROOT_PATH})
 # search for programs in the build host directories
-SET(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 # for libraries and headers in the target directories
-SET(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-SET(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 
 # We must set the OBJCOPY setting into cache so that it's available to the
 # whole project. Otherwise, this does not get set into the CACHE and therefore

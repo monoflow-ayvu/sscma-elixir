@@ -8,6 +8,7 @@
     gnumake
     gcc
     pkg-config
+    ninja
 
     # Additional tools
     git
@@ -35,17 +36,18 @@
     glibc
   ];
 
-  # Environment variables
+  # Environment variables with absolute paths
   env = {
     SG200X_FHS = "1";
-    CMAKE_TOOLCHAIN_FILE = "cmake/toolchain-riscv64-linux-musl-x86_64.cmake";
+    CMAKE_TOOLCHAIN_FILE = "${config.env.DEVENV_ROOT}/cmake/toolchain-riscv64-linux-musl-x86_64.cmake";
+    SG200X_SDK_PATH = "${config.env.DEVENV_ROOT}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc";
   };
 
   # Task to setup SDK before entering shell
   tasks."sg200x:setup-sdk" = {
     exec = ''
       # Setup SDK and host-tools if not present
-      RECAMERA_ROOT=".devenv/state/sg200x-sdk"
+      RECAMERA_ROOT="${config.env.DEVENV_ROOT}/.devenv/state/sg200x-sdk"
 
       if [ ! -d "$RECAMERA_ROOT/sg2002_recamera_emmc" ]; then
         echo "📦 Setting up SDK and host-tools..."
@@ -81,15 +83,15 @@
 
   # Shell initialization script (runs after SDK setup)
   enterShell = ''
-    # Set up the environment variables
-    RECAMERA_ROOT=".devenv/state/sg200x-sdk"
+    # Set up the environment variables with absolute paths
+    RECAMERA_ROOT="${config.env.DEVENV_ROOT}/.devenv/state/sg200x-sdk"
     export SG200X_SDK_PATH="$RECAMERA_ROOT/sg2002_recamera_emmc"
 
-    # Add cross-compiler to PATH
-    export PATH="$RECAMERA_ROOT/host-tools/gcc/riscv64-linux-musl-x86_64/bin:$PATH"
+    # Add cross-compiler to PATH with absolute path
+    COMPILER_DIR="$RECAMERA_ROOT/host-tools/gcc/riscv64-linux-musl-x86_64/bin"
+    export PATH="$COMPILER_DIR:$PATH"
 
     # Create symlinks for the toolchain naming convention
-    COMPILER_DIR="$RECAMERA_ROOT/host-tools/gcc/riscv64-linux-musl-x86_64/bin"
     if [ -d "$COMPILER_DIR" ] && [ ! -f "$COMPILER_DIR/riscv64-unknown-linux-musl-gcc" ]; then
       echo "🔗 Creating compiler symlinks for toolchain compatibility..."
       for tool in gcc g++ objcopy objdump ar as ld nm ranlib strip; do
@@ -99,25 +101,31 @@
       done
     fi
 
-    # Set explicit compiler environment variables
-    export CC="riscv64-unknown-linux-musl-gcc"
-    export CXX="riscv64-unknown-linux-musl-g++"
-    export AR="riscv64-unknown-linux-musl-ar"
-    export STRIP="riscv64-unknown-linux-musl-strip"
+    # Set explicit compiler environment variables with absolute paths
+    export CC="$COMPILER_DIR/riscv64-unknown-linux-musl-gcc"
+    export CXX="$COMPILER_DIR/riscv64-unknown-linux-musl-g++"
+    export AR="$COMPILER_DIR/riscv64-unknown-linux-musl-ar"
+    export STRIP="$COMPILER_DIR/riscv64-unknown-linux-musl-strip"
 
     echo "🚀 SG200X devenv Development Environment Ready!"
     echo "📁 SDK Path: $SG200X_SDK_PATH"
+    echo "🔧 Toolchain File: ${config.env.CMAKE_TOOLCHAIN_FILE}"
+    echo "🔧 Compiler Dir: $COMPILER_DIR"
     echo ""
     echo "💡 To configure the project, run:"
-    echo "   cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-riscv64-linux-musl-x86_64.cmake"
+    echo "   cmake -B build -S ."
     echo "🛠️ To build the project, run:"
     echo "   cmake --build build --config Release"
+    echo ""
+    echo "📝 Or use the convenience scripts:"
+    echo "   devenv run prepare"
+    echo "   devenv run build"
   '';
 
   scripts.prepare.exec = ''
     # Prepare the project
     echo "🔧 Preparing the project..."
-    cmake -B build -S . -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-riscv64-linux-musl-x86_64.cmake
+    cmake -B build -S .
   '';
 
   scripts.build.exec = ''
