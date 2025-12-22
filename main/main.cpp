@@ -281,7 +281,7 @@ int main(int argc, char **argv) {
 
           engine->setInput(0, tensor);
           model->setPreprocessDone(
-              [camera, &frame](void *ctx) { camera->returnFrame(frame); });
+              [camera, frame](void *ctx) mutable { camera->returnFrame(frame); });
 
           ma_err_t ret = MA_OK;
           ma::model::Classifier *classifier = nullptr;
