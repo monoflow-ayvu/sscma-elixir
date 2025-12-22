@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "sg200x-cross",
+      "displayName": "SG200X Cross Compilation",
+      "description": "Cross compilation for SG200X using RISC-V toolchain",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-riscv64-linux-musl-x86_64.cmake",
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "environment": {
+        "SG200X_SDK_PATH": "${sourceDir}/.devenv/state/sg200x-sdk/sg2002_recamera_emmc"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "sg200x-cross",
+      "configurePreset": "sg200x-cross"
+    }
+  ]
+}
