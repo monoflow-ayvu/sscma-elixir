@@ -178,9 +178,14 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      // value.i32 = 1;
-      // camera->commandCtrl(Camera::CtrlType::kPhysical,
-      // Camera::CtrlMode::kWrite, value);
+      // DEBUG: Set FPS to 5
+      value.i32 = 5;
+      ret = camera->commandCtrl(Camera::CtrlType::kFps,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFps failed");
+        return 1;
+      }
       break;
     }
   }
@@ -482,7 +487,7 @@ int main(int argc, char **argv) {
       } else {
         std::cout << json_str << std::endl;
       }
-      std::cout.flush();
+      // std::cout.flush();
 
       // Publish to HTTP if URL is provided
       if (!g_cli_publish_http_url.empty()) {
