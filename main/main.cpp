@@ -33,6 +33,7 @@ static int g_cli_tpu_delay_ms = 0;
 static bool g_cli_emit_base64 = true;
 static bool g_cli_single_mode = false;
 static float g_cli_threshold = 0.5f;
+static bool g_cli_base64_payload = false;
 
 int main(int argc, char **argv) {
   std::string modelPath;
@@ -40,6 +41,7 @@ int main(int argc, char **argv) {
   bool base64 = true;
   bool singleMode = false;
   float threshold = 0.5f;
+  bool base64Payload = false;
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
@@ -54,6 +56,9 @@ int main(int argc, char **argv) {
       ->default_str("false");
   app.add_option("--threshold", threshold, "Detection threshold")
       ->default_str("0.5");
+  app.add_option("--base64-payload", base64Payload,
+                 "Encode entire JSON payload as base64")
+      ->default_str("false");
 
   try {
     app.parse(argc, argv);
@@ -67,6 +72,7 @@ int main(int argc, char **argv) {
   g_cli_emit_base64 = base64;
   g_cli_single_mode = singleMode;
   g_cli_threshold = threshold;
+  g_cli_base64_payload = base64Payload;
 
   // Validate model path exists
   {
@@ -457,7 +463,13 @@ int main(int argc, char **argv) {
         camera->returnFrame(frame);
       }
 
-      std::cout << j.dump() << std::endl;
+      if (g_cli_base64_payload) {
+        std::string json_str = j.dump();
+        std::string encoded = macaron::Base64::Encode(json_str);
+        std::cout << encoded << std::endl;
+      } else {
+        std::cout << j.dump() << std::endl;
+      }
       std::cout.flush();
       last_frame_time = now;
     } else {
