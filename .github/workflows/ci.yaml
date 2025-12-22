@@ -27,6 +27,6 @@ jobs:
       - name: Restore nix cache
         uses: DeterminateSystems/magic-nix-cache-action@main
       - name: Prepare project
-        run: devenv shell --verbose prepare
+        run: devenv shell prepare
       - name: Build project
-        run: devenv shell --verbose build
+        run: devenv shell build
