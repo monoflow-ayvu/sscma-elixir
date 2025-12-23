@@ -68,6 +68,18 @@ struct TPUState {
 };
 
 // ===========================================================================
+// Thread-Safe Shared State for HTTP Publishing
+// ===========================================================================
+struct HttpState {
+  std::mutex mutex;
+
+  // Frame data ready for HTTP publishing
+  bool has_new_frame = false;
+  std::string json_data;
+  int frame_number = 0;
+};
+
+// ===========================================================================
 // TPU Pipeline Thread
 // ===========================================================================
 void tpuPipeline(Camera *camera, ma::Model *model,
@@ -293,9 +305,64 @@ void tpuPipeline(Camera *camera, ma::Model *model,
 }
 
 // ===========================================================================
+// HTTP Publishing Thread
+// ===========================================================================
+void httpPipeline(HttpState *http_state) {
+  if (g_cli_publish_http_url.empty()) {
+    return;  // No HTTP URL configured, thread exits immediately
+  }
+
+  MA_LOGI(TAG, "HTTP pipeline started");
+
+  int last_sent_frame = 0;
+
+  while (g_running.load()) {
+    // Check for new frame data
+    std::string json_to_send;
+    int current_frame = 0;
+    bool has_new = false;
+
+    {
+      std::lock_guard<std::mutex> lock(http_state->mutex);
+      // Only send if frame is newer than what we last sent
+      if (http_state->has_new_frame &&
+          http_state->frame_number > last_sent_frame) {
+        json_to_send = http_state->json_data;
+        current_frame = http_state->frame_number;
+        has_new = true;
+        // Clear the flag after we've grabbed the data
+        http_state->has_new_frame = false;
+      }
+    }
+
+    if (has_new) {
+      // Send HTTP request (outside of mutex lock to avoid blocking camera thread)
+      http_headers headers;
+      headers["Content-Type"] = "application/json";
+      auto resp = requests::post(g_cli_publish_http_url.c_str(), json_to_send,
+                                  headers);
+      if (resp == NULL) {
+        MA_LOGW(TAG, "HTTP POST to %s failed", g_cli_publish_http_url.c_str());
+      } else if (resp->status_code >= 400) {
+        MA_LOGW(TAG, "HTTP POST to %s returned status %d",
+                g_cli_publish_http_url.c_str(), resp->status_code);
+      } else {
+        // Successfully sent, update last sent frame
+        last_sent_frame = current_frame;
+      }
+    } else {
+      // No new frame, sleep briefly to avoid busy-waiting
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  MA_LOGI(TAG, "HTTP pipeline stopped");
+}
+
+// ===========================================================================
 // Camera Pipeline Thread
 // ===========================================================================
-void cameraPipeline(Camera *camera, TPUState *tpu_state) {
+void cameraPipeline(Camera *camera, TPUState *tpu_state, HttpState *http_state) {
   MA_LOGI(TAG, "Camera pipeline started");
 
   // Pre-allocate buffer for base64 encoding
@@ -309,7 +376,9 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
     ma_img_t jpeg_frame;
     ma_err_t ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
     if (ret != MA_OK) {
-      MA_LOGE(TAG, "camera retrieveFrame failed: %d", ret);
+      if (ret != MA_AGAIN) {
+        MA_LOGE(TAG, "camera retrieveFrame failed: %d", ret);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
@@ -382,18 +451,12 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
       }
     }
 
-    // Publish to HTTP if URL is provided
+    // Update HTTP state for async publishing (if URL is configured)
     if (!g_cli_publish_http_url.empty()) {
-      http_headers headers;
-      headers["Content-Type"] = "application/json";
-      auto resp =
-          requests::post(g_cli_publish_http_url.c_str(), json_str, headers);
-      if (resp == NULL) {
-        MA_LOGW(TAG, "HTTP POST to %s failed", g_cli_publish_http_url.c_str());
-      } else if (resp->status_code >= 400) {
-        MA_LOGW(TAG, "HTTP POST to %s returned status %d",
-                g_cli_publish_http_url.c_str(), resp->status_code);
-      }
+      std::lock_guard<std::mutex> lock(http_state->mutex);
+      http_state->json_data = json_str;
+      http_state->frame_number = frame_idx;
+      http_state->has_new_frame = true;
     }
 
     last_frame_time = now;
@@ -627,20 +690,23 @@ int main(int argc, char **argv) {
 
   g_start_time = std::chrono::steady_clock::now();
 
-  // Create shared TPU state
+  // Create shared state structures
   TPUState tpu_state;
+  HttpState http_state;
 
-  MA_LOGI(TAG, "Starting dual pipeline (TPU FPS: %d, Camera: %dx%d @ %d fps)",
+  MA_LOGI(TAG, "Starting pipeline (TPU FPS: %d, Camera: %dx%d @ %d fps)",
           g_cli_tpu_fps > 0 ? g_cli_tpu_fps : -1, g_cli_camera_width,
           g_cli_camera_height, g_cli_camera_fps);
 
   // Start pipeline threads
   std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state);
-  std::thread camera_thread(cameraPipeline, camera, &tpu_state);
+  std::thread camera_thread(cameraPipeline, camera, &tpu_state, &http_state);
+  std::thread http_thread(httpPipeline, &http_state);
 
   // Wait for threads to complete
   tpu_thread.join();
   camera_thread.join();
+  http_thread.join();
 
   MA_LOGI(TAG, "Pipelines stopped, cleaning up...");
 
