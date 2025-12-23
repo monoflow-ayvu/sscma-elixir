@@ -29,12 +29,15 @@ std::chrono::steady_clock::time_point g_start_time;
 
 // CLI configuration (read-only after init)
 static std::string g_cli_model_path;
-static int g_cli_tpu_delay_ms = 0;
+static int g_cli_tpu_fps = 0;  // 0 means run as fast as possible
 static int g_cli_camera_fps = 30;
+static int g_cli_camera_width = 0;   // 0 means use model input width
+static int g_cli_camera_height = 0;  // 0 means use model input height
 static bool g_cli_emit_base64 = true;
 static bool g_cli_single_mode = false;
 static float g_cli_threshold = 0.5f;
 static bool g_cli_base64_payload = false;
+static bool g_cli_quiet = false;
 static std::string g_cli_publish_http_url;
 
 // Model info (read-only after init)
@@ -72,20 +75,24 @@ void tpuPipeline(Camera *camera, ma::Model *model,
   MA_LOGI(TAG, "TPU pipeline started");
 
   auto last_inference_time = std::chrono::steady_clock::now();
+  int64_t tpu_frame_interval_ms = 0;
+  if (g_cli_tpu_fps > 0) {
+    tpu_frame_interval_ms = 1000 / g_cli_tpu_fps;
+  }
 
   while (g_running.load()) {
-    // Respect tpu_delay_ms timing between inferences
-    if (g_cli_tpu_delay_ms > 0) {
-      auto now = std::chrono::steady_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         now - last_inference_time)
-                         .count();
+    // // Respect tpu_fps timing between inferences
+    // if (g_cli_tpu_fps > 0) {
+    //   auto now = std::chrono::steady_clock::now();
+    //   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+    //                      now - last_inference_time)
+    //                      .count();
 
-      if (elapsed < g_cli_tpu_delay_ms) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        continue;
-      }
-    }
+    //   if (elapsed < tpu_frame_interval_ms) {
+    //     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    //     continue;
+    //   }
+    // }
 
     // Retrieve RGB frame from Channel 0
     ma_img_t frame;
@@ -302,6 +309,7 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
     ma_img_t jpeg_frame;
     ma_err_t ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
     if (ret != MA_OK) {
+      MA_LOGE(TAG, "camera retrieveFrame failed: %d", ret);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
@@ -315,6 +323,8 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
                                                               last_frame_time)
             .count();
     int frame_idx = g_camera_frame_count.fetch_add(1) + 1;
+
+    MA_LOGI(TAG, "camera frame %d, elapsed since last frame %ld ms", frame_idx, elapsed_since_last_frame);
 
     // Encode JPEG to base64
     base64_buffer.clear();
@@ -356,15 +366,20 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
     // Return JPEG frame immediately after reading data
     camera->returnFrame(jpeg_frame);
 
-    // Prepare JSON string
-    std::string json_str = j.dump();
+    // Prepare JSON string (only if needed for stdout or HTTP)
+    std::string json_str;
+    if (!g_cli_quiet || !g_cli_publish_http_url.empty()) {
+      json_str = j.dump();
+    }
 
-    // Output to stdout
-    if (g_cli_base64_payload) {
-      std::string encoded = macaron::Base64::Encode(json_str);
-      std::cout << encoded << std::endl;
-    } else {
-      std::cout << json_str << std::endl;
+    // Output to stdout (unless quiet mode)
+    if (!g_cli_quiet) {
+      if (g_cli_base64_payload) {
+        std::string encoded = macaron::Base64::Encode(json_str);
+        std::cout << encoded << std::endl;
+      } else {
+        std::cout << json_str << std::endl;
+      }
     }
 
     // Publish to HTTP if URL is provided
@@ -392,21 +407,31 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state) {
 // ===========================================================================
 int main(int argc, char **argv) {
   std::string modelPath;
-  int tpuDelay = 0;
+  int tpuFps = 0;
   int cameraFps = 30;
+  int cameraWidth = 0;
+  int cameraHeight = 0;
   bool base64 = true;
   bool singleMode = false;
   float threshold = 0.5f;
   bool base64Payload = false;
+  bool quiet = false;
   std::string publishHttpUrl;
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
-  app.add_option("-t,--tpu-delay", tpuDelay,
-                 "How fast to process frames in the TPU (in milliseconds)")
+  app.add_option("--tpu-fps", tpuFps,
+                 "TPU inference FPS (0 = run as fast as possible)")
       ->default_str("0");
-  app.add_option("-f,--fps", cameraFps, "Camera output FPS (frames per second)")
+  app.add_option("--camera-fps", cameraFps,
+                 "Camera output FPS (frames per second)")
       ->default_str("30");
+  app.add_option("--camera-width", cameraWidth,
+                 "Camera output width (0 = use model input width)")
+      ->default_str("0");
+  app.add_option("--camera-height", cameraHeight,
+                 "Camera output height (0 = use model input height)")
+      ->default_str("0");
   app.add_option("-b,--base64", base64,
                  "Output frames as base64. If false, base64 is omitted.")
       ->default_str("true");
@@ -418,6 +443,9 @@ int main(int argc, char **argv) {
   app.add_option("--base64-payload", base64Payload,
                  "Encode entire JSON payload as base64")
       ->default_str("false");
+  app.add_flag("--quiet", quiet,
+               "Disable stdout output (only logs will be printed)")
+      ->default_val(false);
   app.add_option("--publish-http-to", publishHttpUrl,
                  "HTTP URL to POST JSON payload to")
       ->default_str("");
@@ -428,14 +456,15 @@ int main(int argc, char **argv) {
     return app.exit(e);
   }
 
-  // Copy to globals for use by pipeline threads
+  // Copy basic globals (camera dimensions will be set after model loading)
   g_cli_model_path = modelPath;
-  g_cli_tpu_delay_ms = tpuDelay;
+  g_cli_tpu_fps = tpuFps;
   g_cli_camera_fps = cameraFps;
   g_cli_emit_base64 = base64;
   g_cli_single_mode = singleMode;
   g_cli_threshold = threshold;
   g_cli_base64_payload = base64Payload;
+  g_cli_quiet = quiet;
   g_cli_publish_http_url = publishHttpUrl;
 
   // Validate model path exists
@@ -490,6 +519,12 @@ int main(int argc, char **argv) {
   g_input_height = model_input->height;
   MA_LOGI(TAG, "model input size: %dx%d", g_input_width, g_input_height);
 
+  // Set camera dimensions (use model dimensions as defaults if not specified)
+  g_cli_camera_width = (cameraWidth > 0) ? cameraWidth : g_input_width;
+  g_cli_camera_height = (cameraHeight > 0) ? cameraHeight : g_input_height;
+  MA_LOGI(TAG, "camera output size: %dx%d (fps: %d)", g_cli_camera_width,
+          g_cli_camera_height, g_cli_camera_fps);
+
   // Initialize device and camera
   Device *device = Device::getInstance();
   Camera *camera = nullptr;
@@ -535,13 +570,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kFormat (ch0) failed");
         return 1;
       }
-      // TPU channel fps based on tpu_delay_ms
-      if (g_cli_tpu_delay_ms > 0) {
-        value.i32 = std::max(
-            1, static_cast<int>(std::round(1000.0f / g_cli_tpu_delay_ms)));
-      } else {
-        value.i32 = 30;
-      }
+      // TPU channel fps (use tpu_fps, or 1 if 0 for fast processing)
+      value.i32 = (g_cli_tpu_fps > 0) ? g_cli_tpu_fps : 1;
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -557,8 +587,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kChannel 1 failed");
         return 1;
       }
-      value.u16s[0] = g_input_width;
-      value.u16s[1] = g_input_height;
+      value.u16s[0] = g_cli_camera_width;
+      value.u16s[1] = g_cli_camera_height;
       ret = camera->commandCtrl(Camera::CtrlType::kWindow,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -589,7 +619,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  ret = camera->startStream(Camera::StreamMode::kRefreshOnReturn);
+  ret = camera->startStream(Camera::StreamMode::kRefreshOnRetrieve);
   if (ret != MA_OK) {
     MA_LOGE(TAG, "camera startStream failed");
     return 1;
@@ -600,8 +630,9 @@ int main(int argc, char **argv) {
   // Create shared TPU state
   TPUState tpu_state;
 
-  MA_LOGI(TAG, "Starting dual pipeline (TPU delay: %d ms, Camera FPS: %d)",
-          g_cli_tpu_delay_ms, g_cli_camera_fps);
+  MA_LOGI(TAG, "Starting dual pipeline (TPU FPS: %d, Camera: %dx%d @ %d fps)",
+          g_cli_tpu_fps > 0 ? g_cli_tpu_fps : -1, g_cli_camera_width,
+          g_cli_camera_height, g_cli_camera_fps);
 
   // Start pipeline threads
   std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state);
