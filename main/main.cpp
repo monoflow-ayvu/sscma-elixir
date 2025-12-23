@@ -154,12 +154,12 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      // Configure RAW channel (0) for RGB888 inference and JPEG encoding
+      // Configure RAW channel (0) for RGB888 - used for TPU inference
       value.i32 = 0;
       ret = camera->commandCtrl(Camera::CtrlType::kChannel,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kChannel failed");
+        MA_LOGE(TAG, "commandCtrl kChannel 0 failed");
         return 1;
       }
       value.u16s[0] = input_width;
@@ -167,23 +167,58 @@ int main(int argc, char **argv) {
       ret = camera->commandCtrl(Camera::CtrlType::kWindow,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kWindow failed");
+        MA_LOGE(TAG, "commandCtrl kWindow (ch0) failed");
         return 1;
       }
       value.i32 = static_cast<int>(MA_PIXEL_FORMAT_RGB888);
       ret = camera->commandCtrl(Camera::CtrlType::kFormat,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kFormat failed");
+        MA_LOGE(TAG, "commandCtrl kFormat (ch0) failed");
         return 1;
       }
-
-      // DEBUG: Set FPS to 5
-      value.i32 = 5;
+      // tpu fps is based on tpu_delay_ms
+      if (g_cli_tpu_delay_ms > 0) {
+        value.i32 = std::round(1000.0f / g_cli_tpu_delay_ms);
+      } else {
+        value.i32 = 30;
+      }
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kFps failed");
+        MA_LOGE(TAG, "commandCtrl kFps (ch0) failed");
+        return 1;
+      }
+
+      // Configure JPEG channel (1) for hardware-encoded JPEG output
+      value.i32 = 1;
+      ret = camera->commandCtrl(Camera::CtrlType::kChannel,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kChannel 1 failed");
+        return 1;
+      }
+      value.u16s[0] = input_width;
+      value.u16s[1] = input_height;
+      ret = camera->commandCtrl(Camera::CtrlType::kWindow,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kWindow (ch1) failed");
+        return 1;
+      }
+      value.i32 = static_cast<int>(MA_PIXEL_FORMAT_JPEG);
+      ret = camera->commandCtrl(Camera::CtrlType::kFormat,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFormat (ch1) failed");
+        return 1;
+      }
+      // camera fps is 30
+      value.i32 = 30;
+      ret = camera->commandCtrl(Camera::CtrlType::kFps,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFps (ch1) failed");
         return 1;
       }
       break;
@@ -204,22 +239,9 @@ int main(int argc, char **argv) {
   g_start_time = std::chrono::steady_clock::now();
   last_frame_time = g_start_time;
 
-  // Pre-allocate reusable buffers outside the loop to eliminate per-frame
-  // allocations
-  std::vector<uint8_t> frame_buffer;
-  frame_buffer.reserve(input_width * input_height * 3); // Reserve for RGB888
-  std::vector<uint8_t> jpeg_buffer;
-  jpeg_buffer.reserve(input_width *
-                      input_height); // Typical JPEG is smaller than raw
+  // Pre-allocate reusable buffers
   std::string base64_buffer;
-  base64_buffer.reserve(input_width * input_height *
-                        2); // Base64 is ~1.33x JPEG size
-
-  // Pre-allocate OpenCV mats for reuse
-  ::cv::Mat bgr_mat;
-
-  // Compression params are constant, create once
-  const std::vector<int> compression_params = {::cv::IMWRITE_JPEG_QUALITY, 90};
+  base64_buffer.reserve(input_width * input_height * 2); // Base64 is ~1.33x JPEG size
 
   // Cache model name to avoid repeated string copies
   const char *model_name_ptr = model->getName();
@@ -227,8 +249,15 @@ int main(int argc, char **argv) {
       model_name_ptr ? std::string(model_name_ptr) : "";
 
   while (g_running.load()) {
+    // Retrieve hardware-encoded JPEG frame for output
+    ma_img_t jpeg_frame;
+    ma_err_t jpeg_ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
+    
+    // Retrieve RGB frame for TPU inference
     ma_img_t frame;
-    if (camera->retrieveFrame(frame, MA_PIXEL_FORMAT_RGB888) == MA_OK) {
+    ma_err_t rgb_ret = camera->retrieveFrame(frame, MA_PIXEL_FORMAT_RGB888);
+    
+    if (jpeg_ret == MA_OK && rgb_ret == MA_OK) {
       auto now = std::chrono::steady_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                          now - g_start_time)
@@ -239,29 +268,12 @@ int main(int argc, char **argv) {
               .count();
       int idx = g_frame_count.fetch_add(1) + 1;
 
-      // Copy frame data for JPEG encoding (reuse buffer)
-      size_t frame_data_size =
-          frame.width * frame.height * 3; // RGB888 = 3 bytes per pixel
-      frame_buffer.resize(frame_data_size);
-      memcpy(frame_buffer.data(), frame.data, frame_data_size);
-
-      // Convert RGB frame to JPEG using OpenCV (reuse bgr_mat)
-      ::cv::Mat rgb_mat(frame.height, frame.width, CV_8UC3,
-                        frame_buffer.data());
-      ::cv::cvtColor(rgb_mat, bgr_mat, ::cv::COLOR_RGB2BGR);
-
-      // Clear jpeg_buffer but keep capacity
-      jpeg_buffer.clear();
-      bool jpeg_success =
-          ::cv::imencode(".jpg", bgr_mat, jpeg_buffer, compression_params);
-
-      // Encode to base64 directly from jpeg_buffer without intermediate string
-      // copy
       base64_buffer.clear();
-      if (jpeg_success && g_cli_emit_base64) {
+      bool jpeg_success = true;
+      if (g_cli_emit_base64) {
         base64_buffer = macaron::Base64::Encode(
-            std::string(reinterpret_cast<const char *>(jpeg_buffer.data()),
-                        jpeg_buffer.size()));
+            std::string(reinterpret_cast<const char *>(jpeg_frame.data),
+                        jpeg_frame.size));
       }
 
       // Build JSON output
@@ -269,8 +281,7 @@ int main(int argc, char **argv) {
       j["frame_num"] = idx;
       j["elapsed"] = elapsed;
       j["elapsed_since_last_frame"] = elapsed_since_last_frame;
-      j["jpeg_size"] =
-          jpeg_success ? static_cast<uint32_t>(jpeg_buffer.size()) : 0;
+      j["jpeg_size"] = static_cast<uint32_t>(jpeg_frame.size);
       if (g_cli_emit_base64 && jpeg_success) {
         j["frame"] = base64_buffer;
       }
@@ -477,6 +488,9 @@ int main(int argc, char **argv) {
         camera->returnFrame(frame);
       }
 
+      // Return JPEG frame (always need to return it)
+      camera->returnFrame(jpeg_frame);
+
       // Prepare JSON string
       std::string json_str = j.dump();
 
@@ -506,6 +520,13 @@ int main(int argc, char **argv) {
 
       last_frame_time = now;
     } else {
+      // Failed to retrieve one or both frames
+      if (jpeg_ret == MA_OK) {
+        camera->returnFrame(jpeg_frame);
+      }
+      if (rgb_ret == MA_OK) {
+        camera->returnFrame(frame);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
