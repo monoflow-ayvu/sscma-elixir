@@ -29,8 +29,6 @@ std::chrono::steady_clock::time_point g_start_time;
 
 // CLI configuration (read-only after init)
 static std::string g_cli_model_path;
-static int g_cli_camera_width = 0;   // 0 means use model input width
-static int g_cli_camera_height = 0;  // 0 means use model input height
 static bool g_cli_emit_base64 = true;
 static bool g_cli_single_mode = false;
 static float g_cli_threshold = 0.5f;
@@ -449,8 +447,6 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state, HttpState *http_state) 
 // ===========================================================================
 int main(int argc, char **argv) {
   std::string modelPath;
-  int cameraWidth = 0;
-  int cameraHeight = 0;
   bool base64 = true;
   bool singleMode = false;
   float threshold = 0.5f;
@@ -460,12 +456,6 @@ int main(int argc, char **argv) {
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
-  app.add_option("--camera-width", cameraWidth,
-                 "Camera output width (0 = use model input width)")
-      ->default_str("0");
-  app.add_option("--camera-height", cameraHeight,
-                 "Camera output height (0 = use model input height)")
-      ->default_str("0");
   app.add_option("-b,--base64", base64,
                  "Output frames as base64. If false, base64 is omitted.")
       ->default_str("true");
@@ -550,12 +540,7 @@ int main(int argc, char **argv) {
   g_input_width = model_input->width;
   g_input_height = model_input->height;
   MA_LOGI(TAG, "model input size: %dx%d", g_input_width, g_input_height);
-
-  // Set camera dimensions (use model dimensions as defaults if not specified)
-  g_cli_camera_width = (cameraWidth > 0) ? cameraWidth : g_input_width;
-  g_cli_camera_height = (cameraHeight > 0) ? cameraHeight : g_input_height;
-  MA_LOGI(TAG, "camera output size: %dx%d", g_cli_camera_width,
-          g_cli_camera_height);
+  MA_LOGI(TAG, "camera output size: %dx%d", g_input_width, g_input_height);
 
   // Initialize device and camera
   Device *device = Device::getInstance();
@@ -619,8 +604,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kChannel 1 failed");
         return 1;
       }
-      value.u16s[0] = g_cli_camera_width;
-      value.u16s[1] = g_cli_camera_height;
+      value.u16s[0] = g_input_width;
+      value.u16s[1] = g_input_height;
       ret = camera->commandCtrl(Camera::CtrlType::kWindow,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -664,7 +649,7 @@ int main(int argc, char **argv) {
   HttpState http_state;
 
   MA_LOGI(TAG, "Starting pipeline (Camera: %dx%d, processing as fast as possible)",
-          g_cli_camera_width, g_cli_camera_height);
+          g_input_width, g_input_height);
 
   // Start pipeline threads
   std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state);
