@@ -29,8 +29,6 @@ std::chrono::steady_clock::time_point g_start_time;
 
 // CLI configuration (read-only after init)
 static std::string g_cli_model_path;
-static int g_cli_tpu_fps = 0;  // 0 means run as fast as possible
-static int g_cli_camera_fps = 30;
 static int g_cli_camera_width = 0;   // 0 means use model input width
 static int g_cli_camera_height = 0;  // 0 means use model input height
 static bool g_cli_emit_base64 = true;
@@ -86,26 +84,7 @@ void tpuPipeline(Camera *camera, ma::Model *model,
                  ma::engine::EngineCVI *engine, TPUState *tpu_state) {
   MA_LOGI(TAG, "TPU pipeline started");
 
-  auto last_inference_time = std::chrono::steady_clock::now();
-  int64_t tpu_frame_interval_ms = 0;
-  if (g_cli_tpu_fps > 0) {
-    tpu_frame_interval_ms = 1000 / g_cli_tpu_fps;
-  }
-
   while (g_running.load()) {
-    // // Respect tpu_fps timing between inferences
-    // if (g_cli_tpu_fps > 0) {
-    //   auto now = std::chrono::steady_clock::now();
-    //   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-    //                      now - last_inference_time)
-    //                      .count();
-
-    //   if (elapsed < tpu_frame_interval_ms) {
-    //     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    //     continue;
-    //   }
-    // }
-
     // Retrieve RGB frame from Channel 0
     ma_img_t frame;
     ma_err_t ret = camera->retrieveFrame(frame, MA_PIXEL_FORMAT_RGB888);
@@ -115,7 +94,6 @@ void tpuPipeline(Camera *camera, ma::Model *model,
     }
 
     int frame_idx = g_tpu_frame_count.fetch_add(1) + 1;
-    last_inference_time = std::chrono::steady_clock::now();
 
     try {
       auto tpu_start = std::chrono::steady_clock::now();
@@ -394,6 +372,7 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state, HttpState *http_state) 
     int frame_idx = g_camera_frame_count.fetch_add(1) + 1;
 
     MA_LOGI(TAG, "camera frame %d, elapsed since last frame %ld ms", frame_idx, elapsed_since_last_frame);
+    fflush(stdout);
 
     // Encode JPEG to base64
     base64_buffer.clear();
@@ -470,8 +449,6 @@ void cameraPipeline(Camera *camera, TPUState *tpu_state, HttpState *http_state) 
 // ===========================================================================
 int main(int argc, char **argv) {
   std::string modelPath;
-  int tpuFps = 0;
-  int cameraFps = 30;
   int cameraWidth = 0;
   int cameraHeight = 0;
   bool base64 = true;
@@ -483,12 +460,6 @@ int main(int argc, char **argv) {
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
-  app.add_option("--tpu-fps", tpuFps,
-                 "TPU inference FPS (0 = run as fast as possible)")
-      ->default_str("0");
-  app.add_option("--camera-fps", cameraFps,
-                 "Camera output FPS (frames per second)")
-      ->default_str("30");
   app.add_option("--camera-width", cameraWidth,
                  "Camera output width (0 = use model input width)")
       ->default_str("0");
@@ -521,8 +492,6 @@ int main(int argc, char **argv) {
 
   // Copy basic globals (camera dimensions will be set after model loading)
   g_cli_model_path = modelPath;
-  g_cli_tpu_fps = tpuFps;
-  g_cli_camera_fps = cameraFps;
   g_cli_emit_base64 = base64;
   g_cli_single_mode = singleMode;
   g_cli_threshold = threshold;
@@ -585,8 +554,8 @@ int main(int argc, char **argv) {
   // Set camera dimensions (use model dimensions as defaults if not specified)
   g_cli_camera_width = (cameraWidth > 0) ? cameraWidth : g_input_width;
   g_cli_camera_height = (cameraHeight > 0) ? cameraHeight : g_input_height;
-  MA_LOGI(TAG, "camera output size: %dx%d (fps: %d)", g_cli_camera_width,
-          g_cli_camera_height, g_cli_camera_fps);
+  MA_LOGI(TAG, "camera output size: %dx%d", g_cli_camera_width,
+          g_cli_camera_height);
 
   // Initialize device and camera
   Device *device = Device::getInstance();
@@ -633,8 +602,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kFormat (ch0) failed");
         return 1;
       }
-      // TPU channel fps (use tpu_fps, or 1 if 0 for fast processing)
-      value.i32 = (g_cli_tpu_fps > 0) ? g_cli_tpu_fps : 1;
+      // TPU channel fps (set to high value for maximum throughput)
+      value.i32 = 30;
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -665,8 +634,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kFormat (ch1) failed");
         return 1;
       }
-      // Camera output fps
-      value.i32 = g_cli_camera_fps;
+      // Camera output fps (set to high value for maximum throughput)
+      value.i32 = 30;
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -694,9 +663,8 @@ int main(int argc, char **argv) {
   TPUState tpu_state;
   HttpState http_state;
 
-  MA_LOGI(TAG, "Starting pipeline (TPU FPS: %d, Camera: %dx%d @ %d fps)",
-          g_cli_tpu_fps > 0 ? g_cli_tpu_fps : -1, g_cli_camera_width,
-          g_cli_camera_height, g_cli_camera_fps);
+  MA_LOGI(TAG, "Starting pipeline (Camera: %dx%d, processing as fast as possible)",
+          g_cli_camera_width, g_cli_camera_height);
 
   // Start pipeline threads
   std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state);
