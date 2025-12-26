@@ -276,6 +276,9 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         } else if (det) {
           const auto &r = det->getResults();
           for (const auto &it : r) {
+            if (it.h == 0 && it.w == 0) {
+              continue;
+            }
             nlohmann::json dj;
             dj["kind"] = "detector";
             dj["x"] = it.x;
@@ -295,6 +298,9 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         } else if (pose) {
           const auto &r = pose->getResults();
           for (const auto &it : r) {
+            if (it.box.h == 0 && it.box.w == 0) {
+              continue;
+            }
             nlohmann::json pj;
             pj["kind"] = "pose";
             pj["box"] = {{"x", it.box.x},         {"y", it.box.y},
@@ -316,6 +322,9 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         } else if (seg) {
           const auto &r = seg->getResults();
           for (const auto &it : r) {
+            if (it.box.h == 0 && it.box.w == 0) {
+              continue;
+            }
             nlohmann::json sj;
             sj["kind"] = "segment";
             sj["box"] = {{"x", it.box.x},         {"y", it.box.y},

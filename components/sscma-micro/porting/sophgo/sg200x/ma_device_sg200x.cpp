@@ -106,13 +106,13 @@ Device::Device() noexcept {
         MA_STORAGE_GET_POD(m_storage, MA_STORAGE_KEY_MQTT_PUB_QOS, mqttTopicConfig.pub_qos, 0);
         MA_STORAGE_GET_POD(m_storage, MA_STORAGE_KEY_MQTT_SUB_QOS, mqttTopicConfig.sub_qos, 0);
 
-        static TransportMQTT transportMqtt(&mqttConfig);
+        // static TransportMQTT transportMqtt(&mqttConfig);
 
-        if (transportMqtt.init(&mqttTopicConfig) != MA_OK) {
-            ma_abort();
-        }
+        // if (transportMqtt.init(&mqttTopicConfig) != MA_OK) {
+        //     ma_abort();
+        // }
 
-        m_transports.push_back(&transportMqtt);
+        // m_transports.push_back(&transportMqtt);
 #endif
     }
 
