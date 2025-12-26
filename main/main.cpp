@@ -8,6 +8,8 @@
 #include <string>
 #include <thread>
 
+#include <opencv2/opencv.hpp>
+
 #include <sscma.h>
 #include <video.h>
 
@@ -23,8 +25,7 @@ using namespace ma;
 
 // Global variables for control
 std::atomic<bool> g_running(true);
-std::atomic<int> g_camera_frame_count(0);
-std::atomic<int> g_tpu_frame_count(0);
+std::atomic<int> g_frame_count(0);
 std::chrono::steady_clock::time_point g_start_time;
 
 // CLI configuration (read-only after init)
@@ -45,25 +46,6 @@ static int g_input_width = 0;
 static int g_input_height = 0;
 
 // ===========================================================================
-// Thread-Safe Shared State for TPU Results
-// ===========================================================================
-struct TPUState {
-  std::mutex mutex;
-
-  // TPU results
-  bool has_results = false;
-  int64_t tpu_elapsed_ms = 0;
-  nlohmann::json tpu_tensors;
-  nlohmann::json results;
-  int pre_width = 0;
-  int pre_height = 0;
-  int tpu_frame_number = 0;
-
-  // Error state
-  ma_err_t last_error = MA_OK;
-};
-
-// ===========================================================================
 // Thread-Safe Shared State for HTTP Publishing
 // ===========================================================================
 struct HttpState {
@@ -79,42 +61,120 @@ struct HttpState {
 };
 
 // ===========================================================================
-// TPU Pipeline Thread
+// Image Preprocessing Function (similar to SDK example)
 // ===========================================================================
-void tpuPipeline(Camera *camera, ma::Model *model,
-                 ma::engine::EngineCVI *engine, TPUState *tpu_state,
-                 HttpState *http_state) {
-  MA_LOGI(TAG, "TPU pipeline started");
+::cv::Mat preprocessImage(::cv::Mat& image, ma::Model* model) {
+  int ih = image.rows;
+  int iw = image.cols;
+  int oh = 0;
+  int ow = 0;
+  
+  if (model->getInputType() == MA_INPUT_TYPE_IMAGE) {
+    const ma_img_t* model_input = reinterpret_cast<const ma_img_t*>(model->getInput());
+    oh = model_input->height;
+    ow = model_input->width;
+  }
+
+  ::cv::Mat resizedImage;
+  double resize_scale = std::min((double)oh / ih, (double)ow / iw);
+  int nh = (int)(ih * resize_scale);
+  int nw = (int)(iw * resize_scale);
+  ::cv::resize(image, resizedImage, ::cv::Size(nw, nh));
+
+  int top = (oh - nh) / 2;
+  int bottom = (oh - nh) - top;
+  int left = (ow - nw) / 2;
+  int right = (ow - nw) - left;
+
+  ::cv::Mat paddedImage;
+  ::cv::copyMakeBorder(resizedImage, paddedImage, top, bottom, left, right, 
+                       ::cv::BORDER_CONSTANT, ::cv::Scalar::all(0));
+
+  ::cv::cvtColor(paddedImage, paddedImage, ::cv::COLOR_BGR2RGB);
+  return paddedImage;
+}
+
+// ===========================================================================
+// Main Processing Pipeline
+// Retrieves JPEG, decodes, preprocesses, runs inference, outputs JSON
+// ===========================================================================
+void mainProcessingPipeline(Camera *camera, ma::Model *model,
+                            ma::engine::EngineCVI *engine,
+                            HttpState *http_state) {
+  MA_LOGI(TAG, "Main processing pipeline started");
+
+  // Pre-allocate buffer for base64 encoding
+  std::string base64_buffer;
+  base64_buffer.reserve(g_input_width * g_input_height * 2);
+
+  auto last_frame_time = std::chrono::steady_clock::now();
 
   while (g_running.load()) {
-    // Retrieve RGB frame from Channel 0
-    ma_img_t frame;
-    ma_err_t ret = camera->retrieveFrame(frame, MA_PIXEL_FORMAT_RGB888);
+    // Retrieve JPEG frame from Channel 0
+    ma_img_t jpeg_frame;
+    ma_err_t ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
     if (ret != MA_OK) {
+      if (ret != MA_AGAIN) {
+        MA_LOGE(TAG, "retrieveFrame failed: %d", ret);
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
 
-    int frame_idx = g_tpu_frame_count.fetch_add(1) + 1;
+    int frame_idx = g_frame_count.fetch_add(1) + 1;
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - g_start_time)
+                       .count();
+    auto elapsed_since_last_frame =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now -
+                                                              last_frame_time)
+            .count();
+
+    MA_LOGI(TAG, "frame %d, elapsed since last frame %ld ms", frame_idx, elapsed_since_last_frame);
 
     try {
       auto tpu_start = std::chrono::steady_clock::now();
 
-      // Set up tensor with physical address
-      ma_tensor_t tensor = {
-          .size = frame.size,
-          .is_physical = true,
-          .is_variable = false,
-      };
-      tensor.data.data = reinterpret_cast<void *>(frame.data);
+      // Store JPEG data for base64 encoding (copy before decoding)
+      std::string jpeg_data(reinterpret_cast<const char*>(jpeg_frame.data), jpeg_frame.size);
+      uint32_t jpeg_size = jpeg_frame.size;
 
-      engine->setInput(0, tensor);
+      // Decode JPEG to cv::Mat (BGR format)
+      ::cv::Mat image_catch = ::cv::imdecode(
+          ::cv::Mat(1, jpeg_size, CV_8UC1, 
+                    const_cast<char*>(jpeg_data.data())),
+          ::cv::IMREAD_COLOR);
 
-      // Return frame after preprocessing is done
-      model->setPreprocessDone(
-          [camera, frame](void *ctx) mutable { camera->returnFrame(frame); });
+      // Return JPEG frame immediately after decoding
+      camera->returnFrame(jpeg_frame);
 
-      // Run inference based on model type
+      if (image_catch.empty()) {
+        MA_LOGE(TAG, "Failed to decode JPEG image");
+        last_frame_time = now;
+        continue;
+      }
+
+      // Preprocess image: resize, pad, convert BGR to RGB
+      ::cv::Mat preprocessed_image = preprocessImage(image_catch, model);
+      if (preprocessed_image.empty()) {
+        MA_LOGE(TAG, "Preprocessed image is empty");
+        last_frame_time = now;
+        continue;
+      }
+
+      // Create ma_img_t from preprocessed cv::Mat
+      // Note: preprocessed_image must stay in scope until inference completes
+      ma_img_t img;
+      img.data = preprocessed_image.data;
+      img.size = preprocessed_image.rows * preprocessed_image.cols * preprocessed_image.channels();
+      img.width = preprocessed_image.cols;
+      img.height = preprocessed_image.rows;
+      img.format = MA_PIXEL_FORMAT_RGB888;
+      img.rotate = MA_PIXEL_ROTATE_0;
+      img.physical = false;
+
+      // Run inference based on model type - pass the image pointer
       ret = MA_OK;
       ma::model::Classifier *classifier = nullptr;
       ma::model::PoseDetector *pose = nullptr;
@@ -124,23 +184,22 @@ void tpuPipeline(Camera *camera, ma::Model *model,
       if (model->getOutputType() == MA_OUTPUT_TYPE_CLASS) {
         classifier = static_cast<ma::model::Classifier *>(model);
         classifier->setConfig(MA_MODEL_CFG_OPT_THRESHOLD, g_cli_threshold);
-        ret = classifier->run(nullptr);
+        ret = classifier->run(&img);
       } else if (model->getOutputType() == MA_OUTPUT_TYPE_KEYPOINT) {
         pose = static_cast<ma::model::PoseDetector *>(model);
         pose->setConfig(MA_MODEL_CFG_OPT_THRESHOLD, g_cli_threshold);
-        ret = pose->run(nullptr);
+        ret = pose->run(&img);
       } else if (model->getOutputType() == MA_OUTPUT_TYPE_SEGMENT) {
         seg = static_cast<ma::model::Segmentor *>(model);
         seg->setConfig(MA_MODEL_CFG_OPT_THRESHOLD, g_cli_threshold);
-        ret = seg->run(nullptr);
+        ret = seg->run(&img);
       } else if (model->getOutputType() == MA_OUTPUT_TYPE_BBOX ||
                  model->getOutputType() == MA_OUTPUT_TYPE_TENSOR) {
         det = static_cast<ma::model::Detector *>(model);
         det->setConfig(MA_MODEL_CFG_OPT_THRESHOLD, g_cli_threshold);
-        ret = det->run(nullptr);
+        ret = det->run(&img);
       } else {
         ret = MA_ENOTSUP;
-        camera->returnFrame(frame);
       }
 
       if (ret == MA_OK) {
@@ -254,17 +313,52 @@ void tpuPipeline(Camera *camera, ma::Model *model,
           }
         }
 
-        // Update shared state with mutex protection
-        {
-          std::lock_guard<std::mutex> lock(tpu_state->mutex);
-          tpu_state->has_results = true;
-          tpu_state->tpu_elapsed_ms = tpu_elapsed;
-          tpu_state->tpu_tensors = std::move(tpu_tensors);
-          tpu_state->results = std::move(results);
-          tpu_state->pre_width = pre_width;
-          tpu_state->pre_height = pre_height;
-          tpu_state->tpu_frame_number = frame_idx;
-          tpu_state->last_error = MA_OK;
+        // Build complete JSON output with JPEG and TPU results
+        nlohmann::json j;
+        j["frame_num"] = frame_idx;
+        j["elapsed"] = elapsed;
+        j["elapsed_since_last_frame"] = elapsed_since_last_frame;
+        j["jpeg_size"] = jpeg_size;
+
+        // Add base64-encoded JPEG if requested
+        if (g_cli_emit_base64) {
+          base64_buffer = macaron::Base64::Encode(jpeg_data);
+          j["frame"] = base64_buffer;
+        }
+
+        // Add TPU results
+        j["tpu"] = tpu_tensors;
+        j["tpu_elapsed"] = tpu_elapsed;
+        j["results"] = results;
+        j["pre_shape"] = {{"w", pre_width}, {"h", pre_height}};
+        j["output_type"] = g_model_output_type;
+        j["model_name"] = g_model_name_str;
+        j["model_type"] = g_model_type;
+        j["model_input_type"] = g_model_input_type;
+
+        // Prepare JSON string (only if needed for stdout or HTTP)
+        std::string json_str;
+        if (!g_cli_quiet || !g_cli_publish_http_url.empty()) {
+          json_str = j.dump();
+        }
+
+        // Output to stdout (unless quiet mode)
+        if (!g_cli_quiet) {
+          if (g_cli_base64_payload) {
+            std::string encoded = macaron::Base64::Encode(json_str);
+            std::cout << encoded << std::endl;
+          } else {
+            std::cout << json_str << std::endl;
+          }
+          fflush(stdout);
+        }
+
+        // Update HTTP state for async publishing (if URL is configured)
+        if (!g_cli_publish_http_url.empty()) {
+          std::lock_guard<std::mutex> lock(http_state->mutex);
+          http_state->json_data = json_str;
+          http_state->frame_number = frame_idx;
+          http_state->has_new_frame = true;
         }
 
         // Exit in single mode after successful inference
@@ -285,19 +379,20 @@ void tpuPipeline(Camera *camera, ma::Model *model,
         }
       } else {
         // Inference failed
-        std::lock_guard<std::mutex> lock(tpu_state->mutex);
-        tpu_state->last_error = ret;
-        camera->returnFrame(frame);
+        MA_LOGE(TAG, "Inference failed with error: %d", ret);
       }
+
+      last_frame_time = now;
+    } catch (const std::exception& e) {
+      MA_LOGE(TAG, "Processing pipeline exception: %s", e.what());
+      last_frame_time = now;
     } catch (...) {
-      MA_LOGE(TAG, "TPU pipeline exception");
-      std::lock_guard<std::mutex> lock(tpu_state->mutex);
-      tpu_state->last_error = MA_FAILED;
-      camera->returnFrame(frame);
+      MA_LOGE(TAG, "Processing pipeline unknown exception");
+      last_frame_time = now;
     }
   }
 
-  MA_LOGI(TAG, "TPU pipeline stopped");
+  MA_LOGI(TAG, "Main processing pipeline stopped");
 }
 
 // ===========================================================================
@@ -360,112 +455,6 @@ void httpPipeline(HttpState *http_state) {
   MA_LOGI(TAG, "HTTP pipeline stopped");
 }
 
-// ===========================================================================
-// Camera Pipeline Thread
-// ===========================================================================
-void cameraPipeline(Camera *camera, TPUState *tpu_state, HttpState *http_state) {
-  MA_LOGI(TAG, "Camera pipeline started");
-
-  // Pre-allocate buffer for base64 encoding
-  std::string base64_buffer;
-  base64_buffer.reserve(g_input_width * g_input_height * 2);
-
-  auto last_frame_time = std::chrono::steady_clock::now();
-
-  while (g_running.load()) {
-    // Retrieve JPEG frame from Channel 1
-    ma_img_t jpeg_frame;
-    ma_err_t ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
-    if (ret != MA_OK) {
-      if (ret != MA_AGAIN) {
-        MA_LOGE(TAG, "camera retrieveFrame failed: %d", ret);
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      continue;
-    }
-
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       now - g_start_time)
-                       .count();
-    auto elapsed_since_last_frame =
-        std::chrono::duration_cast<std::chrono::milliseconds>(now -
-                                                              last_frame_time)
-            .count();
-    int frame_idx = g_camera_frame_count.fetch_add(1) + 1;
-
-    MA_LOGI(TAG, "camera frame %d, elapsed since last frame %ld ms", frame_idx, elapsed_since_last_frame);
-    fflush(stdout);
-
-    // Encode JPEG to base64
-    base64_buffer.clear();
-    if (g_cli_emit_base64) {
-      base64_buffer = macaron::Base64::Encode(std::string(
-          reinterpret_cast<const char *>(jpeg_frame.data), jpeg_frame.size));
-    }
-
-    // Build JSON output
-    nlohmann::json j;
-    j["frame_num"] = frame_idx;
-    j["elapsed"] = elapsed;
-    j["elapsed_since_last_frame"] = elapsed_since_last_frame;
-    j["jpeg_size"] = static_cast<uint32_t>(jpeg_frame.size);
-    if (g_cli_emit_base64) {
-      j["frame"] = base64_buffer;
-    }
-
-    // Copy TPU state under mutex (quick copy, then release)
-    {
-      std::lock_guard<std::mutex> lock(tpu_state->mutex);
-      if (tpu_state->has_results) {
-        j["tpu"] = tpu_state->tpu_tensors;
-        j["tpu_elapsed"] = tpu_state->tpu_elapsed_ms;
-        j["results"] = tpu_state->results;
-        j["pre_shape"] = {{"w", tpu_state->pre_width},
-                          {"h", tpu_state->pre_height}};
-        j["tpu_frame_num"] = tpu_state->tpu_frame_number;
-        j["output_type"] = g_model_output_type;
-        j["model_name"] = g_model_name_str;
-        j["model_type"] = g_model_type;
-        j["model_input_type"] = g_model_input_type;
-      }
-      if (tpu_state->last_error != MA_OK) {
-        j["tpu_err"] = tpu_state->last_error;
-      }
-    }
-
-    // Return JPEG frame immediately after reading data
-    camera->returnFrame(jpeg_frame);
-
-    // Prepare JSON string (only if needed for stdout or HTTP)
-    std::string json_str;
-    if (!g_cli_quiet || !g_cli_publish_http_url.empty()) {
-      json_str = j.dump();
-    }
-
-    // Output to stdout (unless quiet mode)
-    if (!g_cli_quiet) {
-      if (g_cli_base64_payload) {
-        std::string encoded = macaron::Base64::Encode(json_str);
-        std::cout << encoded << std::endl;
-      } else {
-        std::cout << json_str << std::endl;
-      }
-    }
-
-    // Update HTTP state for async publishing (if URL is configured)
-    if (!g_cli_publish_http_url.empty()) {
-      std::lock_guard<std::mutex> lock(http_state->mutex);
-      http_state->json_data = json_str;
-      http_state->frame_number = frame_idx;
-      http_state->has_new_frame = true;
-    }
-
-    last_frame_time = now;
-  }
-
-  MA_LOGI(TAG, "Camera pipeline stopped");
-}
 
 // ===========================================================================
 // Main Entry Point
@@ -589,39 +578,7 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      // Configure RAW channel (0) for RGB888 - used for TPU inference
-      value.i32 = 0;
-      ret = camera->commandCtrl(Camera::CtrlType::kChannel,
-                                Camera::CtrlMode::kWrite, value);
-      if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kChannel 0 failed");
-        return 1;
-      }
-      value.u16s[0] = g_input_width;
-      value.u16s[1] = g_input_height;
-      ret = camera->commandCtrl(Camera::CtrlType::kWindow,
-                                Camera::CtrlMode::kWrite, value);
-      if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kWindow (ch0) failed");
-        return 1;
-      }
-      value.i32 = static_cast<int>(MA_PIXEL_FORMAT_RGB888);
-      ret = camera->commandCtrl(Camera::CtrlType::kFormat,
-                                Camera::CtrlMode::kWrite, value);
-      if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kFormat (ch0) failed");
-        return 1;
-      }
-      // TPU channel fps (set to high value for maximum throughput)
-      value.i32 = 30;
-      ret = camera->commandCtrl(Camera::CtrlType::kFps,
-                                Camera::CtrlMode::kWrite, value);
-      if (ret != MA_OK) {
-        MA_LOGE(TAG, "commandCtrl kFps (ch0) failed");
-        return 1;
-      }
-
-      // Configure JPEG channel (1) for hardware-encoded JPEG output
+      // Configure JPEG channel (1) - camera implementation maps JPEG to channel 1
       value.i32 = 1;
       ret = camera->commandCtrl(Camera::CtrlType::kChannel,
                                 Camera::CtrlMode::kWrite, value);
@@ -644,8 +601,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kFormat (ch1) failed");
         return 1;
       }
-      // Camera output fps (set to high value for maximum throughput)
-      value.i32 = 30;
+      // JPEG channel fps
+      value.i32 = 3;
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -669,21 +626,18 @@ int main(int argc, char **argv) {
 
   g_start_time = std::chrono::steady_clock::now();
 
-  // Create shared state structures
-  TPUState tpu_state;
+  // Create shared state structure for HTTP publishing
   HttpState http_state;
 
-  MA_LOGI(TAG, "Starting pipeline (Camera: %dx%d, processing as fast as possible)",
+  MA_LOGI(TAG, "Starting processing pipeline (Camera: %dx%d)",
           g_input_width, g_input_height);
 
   // Start pipeline threads
-  std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state, &http_state);
-  std::thread camera_thread(cameraPipeline, camera, &tpu_state, &http_state);
+  std::thread processing_thread(mainProcessingPipeline, camera, model, engine, &http_state);
   std::thread http_thread(httpPipeline, &http_state);
 
   // Wait for threads to complete
-  tpu_thread.join();
-  camera_thread.join();
+  processing_thread.join();
   http_thread.join();
 
   MA_LOGI(TAG, "Pipelines stopped, cleaning up...");
