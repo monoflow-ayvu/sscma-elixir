@@ -73,13 +73,17 @@ struct HttpState {
   bool has_new_frame = false;
   std::string json_data;
   int frame_number = 0;
+  
+  // Track if at least one HTTP POST was successfully sent
+  bool at_least_one_post_sent = false;
 };
 
 // ===========================================================================
 // TPU Pipeline Thread
 // ===========================================================================
 void tpuPipeline(Camera *camera, ma::Model *model,
-                 ma::engine::EngineCVI *engine, TPUState *tpu_state) {
+                 ma::engine::EngineCVI *engine, TPUState *tpu_state,
+                 HttpState *http_state) {
   MA_LOGI(TAG, "TPU pipeline started");
 
   while (g_running.load()) {
@@ -260,7 +264,19 @@ void tpuPipeline(Camera *camera, ma::Model *model,
         }
 
         // Exit in single mode after successful inference
+        // If HTTP POST is enabled, wait until at least one POST is sent
         if (g_cli_single_mode) {
+          if (!g_cli_publish_http_url.empty() && http_state != nullptr) {
+            // Wait until at least one HTTP POST is successfully sent
+            bool post_sent = false;
+            while (!post_sent && g_running.load()) {
+              std::this_thread::sleep_for(std::chrono::milliseconds(10));
+              {
+                std::lock_guard<std::mutex> lock(http_state->mutex);
+                post_sent = http_state->at_least_one_post_sent;
+              }
+            }
+          }
           g_running.store(false);
         }
       } else {
@@ -325,6 +341,11 @@ void httpPipeline(HttpState *http_state) {
       } else {
         // Successfully sent, update last sent frame
         last_sent_frame = current_frame;
+        // Mark that at least one POST was successfully sent
+        {
+          std::lock_guard<std::mutex> lock(http_state->mutex);
+          http_state->at_least_one_post_sent = true;
+        }
       }
     } else {
       // No new frame, sleep briefly to avoid busy-waiting
@@ -652,7 +673,7 @@ int main(int argc, char **argv) {
           g_input_width, g_input_height);
 
   // Start pipeline threads
-  std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state);
+  std::thread tpu_thread(tpuPipeline, camera, model, engine, &tpu_state, &http_state);
   std::thread camera_thread(cameraPipeline, camera, &tpu_state, &http_state);
   std::thread http_thread(httpPipeline, &http_state);
 
