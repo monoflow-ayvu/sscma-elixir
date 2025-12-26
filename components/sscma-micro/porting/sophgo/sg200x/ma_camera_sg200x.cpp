@@ -201,7 +201,7 @@ ma_err_t CameraSG200X::startStream(StreamMode mode) noexcept {
     if (m_streaming) [[unlikely]] {
         return MA_OK;
     }
-    MA_LOGD(TAG, "CameraSG200X::startStream: %d", m_id);
+    MA_LOGD(TAG, "CameraSG200X::startStream: %zu", m_id);
     for (int i = 0; i < CHN_MAX; i++) {
         if (m_channels[i].enabled && !m_channels[i].configured) {
             MA_LOGW(TAG, "Channel %d is not configured", i);
@@ -241,7 +241,8 @@ ma_err_t CameraSG200X::startStream(StreamMode mode) noexcept {
             if (m_channels[i].queue != nullptr) {
                 delete m_channels[i].queue;
             }
-            m_channels[i].queue = new MessageBox(param.fps);
+            // m_channels[i].queue = new MessageBox(param.fps);
+            m_channels[i].queue = new MessageBox(1);
 
             if (param.format == VIDEO_FORMAT_RGB888 || param.format == VIDEO_FORMAT_NV21) {
                 registerVideoFrameHandler(static_cast<video_ch_index_t>(i), 0, vpssCallbackStub, this);
@@ -262,7 +263,7 @@ void CameraSG200X::stopStream() noexcept {
     if (!m_streaming) [[unlikely]] {
         return;
     }
-    MA_LOGD(TAG, "CameraSG200X::stopStream: %d", m_id);
+    MA_LOGD(TAG, "CameraSG200X::stopStream: %zu", m_id);
     m_streaming = false;
     CAMERA_DEINIT();
 }

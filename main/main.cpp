@@ -37,13 +37,18 @@ static bool g_cli_base64_payload = false;
 static bool g_cli_quiet = false;
 static std::string g_cli_publish_http_url;
 
+// Camera/transmission settings (CLI configurable)
+static int g_camera_width = 0;
+static int g_camera_height = 0;
+static int g_camera_fps = 3;
+
 // Model info (read-only after init)
 static std::string g_model_name_str;
 static int g_model_type = 0;
 static int g_model_input_type = 0;
 static int g_model_output_type = 0;
-static int g_input_width = 0;
-static int g_input_height = 0;
+static int g_model_input_width = 0;
+static int g_model_input_height = 0;
 
 // ===========================================================================
 // Thread-Safe Shared State for HTTP Publishing
@@ -64,6 +69,7 @@ struct HttpState {
 // Image Preprocessing Function (similar to SDK example)
 // ===========================================================================
 ::cv::Mat preprocessImage(::cv::Mat& image, ma::Model* model) {
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
   int ih = image.rows;
   int iw = image.cols;
   int oh = 0;
@@ -91,6 +97,9 @@ struct HttpState {
                        ::cv::BORDER_CONSTANT, ::cv::Scalar::all(0));
 
   ::cv::cvtColor(paddedImage, paddedImage, ::cv::COLOR_BGR2RGB);
+  std::chrono::steady_clock::time_point end_time = std::chrono::steady_clock::now();
+  std::chrono::duration<double> duration = end_time - start_time;
+  MA_LOGD(TAG, "preprocessImage time: %f ms", duration.count() * 1000);
   return paddedImage;
 }
 
@@ -105,7 +114,7 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
 
   // Pre-allocate buffer for base64 encoding
   std::string base64_buffer;
-  base64_buffer.reserve(g_input_width * g_input_height * 2);
+  base64_buffer.reserve(g_camera_width * g_camera_height * 2);
 
   auto last_frame_time = std::chrono::steady_clock::now();
 
@@ -135,16 +144,27 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
 
     try {
       auto tpu_start = std::chrono::steady_clock::now();
+      auto step_start = tpu_start;
 
       // Store JPEG data for base64 encoding (copy before decoding)
       std::string jpeg_data(reinterpret_cast<const char*>(jpeg_frame.data), jpeg_frame.size);
       uint32_t jpeg_size = jpeg_frame.size;
+
+      auto step_end = std::chrono::steady_clock::now();
+      MA_LOGD(TAG, "[TIMING] JPEG copy: %.2f ms", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      step_start = step_end;
 
       // Decode JPEG to cv::Mat (BGR format)
       ::cv::Mat image_catch = ::cv::imdecode(
           ::cv::Mat(1, jpeg_size, CV_8UC1, 
                     const_cast<char*>(jpeg_data.data())),
           ::cv::IMREAD_COLOR);
+
+      step_end = std::chrono::steady_clock::now();
+      MA_LOGD(TAG, "[TIMING] JPEG decode: %.2f ms", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      step_start = step_end;
 
       // Return JPEG frame immediately after decoding
       camera->returnFrame(jpeg_frame);
@@ -157,6 +177,12 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
 
       // Preprocess image: resize, pad, convert BGR to RGB
       ::cv::Mat preprocessed_image = preprocessImage(image_catch, model);
+
+      step_end = std::chrono::steady_clock::now();
+      MA_LOGD(TAG, "[TIMING] Preprocess (total): %.2f ms", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      step_start = step_end;
+
       if (preprocessed_image.empty()) {
         MA_LOGE(TAG, "Preprocessed image is empty");
         last_frame_time = now;
@@ -173,6 +199,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
       img.format = MA_PIXEL_FORMAT_RGB888;
       img.rotate = MA_PIXEL_ROTATE_0;
       img.physical = false;
+
+      step_end = std::chrono::steady_clock::now();
+      MA_LOGD(TAG, "[TIMING] Create ma_img_t: %.2f ms", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      step_start = step_end;
 
       // Run inference based on model type - pass the image pointer
       ret = MA_OK;
@@ -201,6 +232,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
       } else {
         ret = MA_ENOTSUP;
       }
+
+      step_end = std::chrono::steady_clock::now();
+      MA_LOGD(TAG, "[TIMING] Model inference: %.2f ms", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      step_start = step_end;
 
       if (ret == MA_OK) {
         auto tpu_end = std::chrono::steady_clock::now();
@@ -236,6 +272,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
           tj["name"] = t.name ? t.name : "";
           tpu_tensors.push_back(std::move(tj));
         }
+
+        step_end = std::chrono::steady_clock::now();
+        MA_LOGD(TAG, "[TIMING] Build TPU tensor metadata: %.2f ms", 
+                std::chrono::duration<double, std::milli>(step_end - step_start).count());
+        step_start = step_end;
 
         // Extract results based on model type
         nlohmann::json results = nlohmann::json::array();
@@ -313,6 +354,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
           }
         }
 
+        step_end = std::chrono::steady_clock::now();
+        MA_LOGD(TAG, "[TIMING] Extract results: %.2f ms", 
+                std::chrono::duration<double, std::milli>(step_end - step_start).count());
+        step_start = step_end;
+
         // Build complete JSON output with JPEG and TPU results
         nlohmann::json j;
         j["frame_num"] = frame_idx;
@@ -324,6 +370,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         if (g_cli_emit_base64) {
           base64_buffer = macaron::Base64::Encode(jpeg_data);
           j["frame"] = base64_buffer;
+
+          step_end = std::chrono::steady_clock::now();
+          MA_LOGD(TAG, "[TIMING] Base64 encode JPEG: %.2f ms", 
+                  std::chrono::duration<double, std::milli>(step_end - step_start).count());
+          step_start = step_end;
         }
 
         // Add TPU results
@@ -331,15 +382,26 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         j["tpu_elapsed"] = tpu_elapsed;
         j["results"] = results;
         j["pre_shape"] = {{"w", pre_width}, {"h", pre_height}};
+        j["camera_shape"] = {{"w", g_camera_width}, {"h", g_camera_height}};
         j["output_type"] = g_model_output_type;
         j["model_name"] = g_model_name_str;
         j["model_type"] = g_model_type;
         j["model_input_type"] = g_model_input_type;
 
+        step_end = std::chrono::steady_clock::now();
+        MA_LOGD(TAG, "[TIMING] Build JSON object: %.2f ms", 
+                std::chrono::duration<double, std::milli>(step_end - step_start).count());
+        step_start = step_end;
+
         // Prepare JSON string (only if needed for stdout or HTTP)
         std::string json_str;
         if (!g_cli_quiet || !g_cli_publish_http_url.empty()) {
           json_str = j.dump();
+
+          step_end = std::chrono::steady_clock::now();
+          MA_LOGD(TAG, "[TIMING] JSON serialize: %.2f ms", 
+                  std::chrono::duration<double, std::milli>(step_end - step_start).count());
+          step_start = step_end;
         }
 
         // Output to stdout (unless quiet mode)
@@ -351,6 +413,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
             std::cout << json_str << std::endl;
           }
           fflush(stdout);
+
+          step_end = std::chrono::steady_clock::now();
+          MA_LOGD(TAG, "[TIMING] Stdout output: %.2f ms", 
+                  std::chrono::duration<double, std::milli>(step_end - step_start).count());
+          step_start = step_end;
         }
 
         // Update HTTP state for async publishing (if URL is configured)
@@ -360,6 +427,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
           http_state->frame_number = frame_idx;
           http_state->has_new_frame = true;
         }
+
+        // Log total pipeline time
+        auto pipeline_end = std::chrono::steady_clock::now();
+        MA_LOGI(TAG, "[TIMING] Total pipeline: %.2f ms", 
+                std::chrono::duration<double, std::milli>(pipeline_end - tpu_start).count());
 
         // Exit in single mode after successful inference
         // If HTTP POST is enabled, wait until at least one POST is sent
@@ -467,6 +539,9 @@ int main(int argc, char **argv) {
   bool base64Payload = false;
   bool quiet = false;
   std::string publishHttpUrl;
+  int cameraWidth = 0;   // 0 means use model input dimensions
+  int cameraHeight = 0;  // 0 means use model input dimensions
+  int cameraFps = 3;
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
@@ -487,6 +562,15 @@ int main(int argc, char **argv) {
   app.add_option("--publish-http-to", publishHttpUrl,
                  "HTTP URL to POST JSON payload to")
       ->default_str("");
+  app.add_option("--camera-width", cameraWidth,
+                 "Width of the transmitted camera image (0 = use model input size)")
+      ->default_val(0);
+  app.add_option("--camera-height", cameraHeight,
+                 "Height of the transmitted camera image (0 = use model input size)")
+      ->default_val(0);
+  app.add_option("--fps", cameraFps,
+                 "FPS for camera capture / TPU processing")
+      ->default_val(3);
 
   try {
     app.parse(argc, argv);
@@ -502,6 +586,7 @@ int main(int argc, char **argv) {
   g_cli_base64_payload = base64Payload;
   g_cli_quiet = quiet;
   g_cli_publish_http_url = publishHttpUrl;
+  g_camera_fps = cameraFps;
 
   // Validate model path exists
   {
@@ -548,13 +633,17 @@ int main(int argc, char **argv) {
   g_model_input_type = model->getInputType();
   g_model_output_type = model->getOutputType();
 
-  // Get model input dimensions
+  // Get model input dimensions (used for TPU preprocessing)
   const ma_img_t *model_input =
       static_cast<const ma_img_t *>(model->getInput());
-  g_input_width = model_input->width;
-  g_input_height = model_input->height;
-  MA_LOGI(TAG, "model input size: %dx%d", g_input_width, g_input_height);
-  MA_LOGI(TAG, "camera output size: %dx%d", g_input_width, g_input_height);
+  g_model_input_width = model_input->width;
+  g_model_input_height = model_input->height;
+  MA_LOGI(TAG, "model input size: %dx%d", g_model_input_width, g_model_input_height);
+
+  // Set camera dimensions (use model input size if not specified)
+  g_camera_width = (cameraWidth > 0) ? cameraWidth : g_model_input_width;
+  g_camera_height = (cameraHeight > 0) ? cameraHeight : g_model_input_height;
+  MA_LOGI(TAG, "camera output size: %dx%d @ %d fps", g_camera_width, g_camera_height, g_camera_fps);
 
   // Initialize device and camera
   Device *device = Device::getInstance();
@@ -586,8 +675,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kChannel 1 failed");
         return 1;
       }
-      value.u16s[0] = g_input_width;
-      value.u16s[1] = g_input_height;
+      value.u16s[0] = g_camera_width;
+      value.u16s[1] = g_camera_height;
       ret = camera->commandCtrl(Camera::CtrlType::kWindow,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -602,7 +691,7 @@ int main(int argc, char **argv) {
         return 1;
       }
       // JPEG channel fps
-      value.i32 = 3;
+      value.i32 = g_camera_fps;
       ret = camera->commandCtrl(Camera::CtrlType::kFps,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -629,8 +718,8 @@ int main(int argc, char **argv) {
   // Create shared state structure for HTTP publishing
   HttpState http_state;
 
-  MA_LOGI(TAG, "Starting processing pipeline (Camera: %dx%d)",
-          g_input_width, g_input_height);
+  MA_LOGI(TAG, "Starting processing pipeline (Camera: %dx%d @ %d fps, Model: %dx%d)",
+          g_camera_width, g_camera_height, g_camera_fps, g_model_input_width, g_model_input_height);
 
   // Start pipeline threads
   std::thread processing_thread(mainProcessingPipeline, camera, model, engine, &http_state);

@@ -8,7 +8,7 @@
 #include "app_ipcam_ll.h"
 
 
-#define LL_DATA_CACHE_DEPTH_MAX     30
+#define LL_DATA_CACHE_DEPTH_MAX     1
 
 #define LL_INIT(N) ((N)->next = (N)->prev = (N))
 
@@ -131,7 +131,7 @@ int app_ipcam_LList_Data_Push(void *pData, void *pArgs)
 
     if (pstDataCtx->LListDepth > LL_DATA_CACHE_DEPTH_MAX) {
         void *pDataDrop = NULL;
-        printf("LL cache is full and drop data. (LList depth:%d > Max:%d) \n", pstDataCtx->LListDepth, LL_DATA_CACHE_DEPTH_MAX);
+        // printf("LL cache is full and drop data. (LList depth:%d > Max:%d) \n", pstDataCtx->LListDepth, LL_DATA_CACHE_DEPTH_MAX);
         if (app_ipcam_LList_Data_Pop(&pDataDrop, pArgs) != 0) {
             free(pNewNode);
             printf("LL data drop failded!\n");
