@@ -192,6 +192,7 @@ void tpuPipeline(Camera *camera, ma::Model *model,
             cj["kind"] = "classifier";
             cj["score"] = it.score;
             cj["target"] = it.target;
+            MA_LOGD(TAG, "classifier result: %s", cj.dump().c_str());
             results.push_back(std::move(cj));
           }
         } else if (det) {
@@ -210,6 +211,7 @@ void tpuPipeline(Camera *camera, ma::Model *model,
             float x2 = (it.x + it.w / 2.0f) * pre_width;
             float y2 = (it.y + it.h / 2.0f) * pre_height;
             dj["abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
+            MA_LOGD(TAG, "detector result: %s", dj.dump().c_str());
             results.push_back(std::move(dj));
           }
         } else if (pose) {
@@ -230,6 +232,7 @@ void tpuPipeline(Camera *camera, ma::Model *model,
               pts.push_back({{"x", pt.x}, {"y", pt.y}, {"z", pt.z}});
             }
             pj["keypoints"] = std::move(pts);
+            MA_LOGD(TAG, "pose result: %s", pj.dump().c_str());
             results.push_back(std::move(pj));
           }
         } else if (seg) {
@@ -246,6 +249,7 @@ void tpuPipeline(Camera *camera, ma::Model *model,
             float y2 = (it.box.y + it.box.h / 2.0f) * pre_height;
             sj["box_abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
             sj["mask"] = {{"width", it.mask.width}, {"height", it.mask.height}};
+            MA_LOGD(TAG, "segment result: %s", sj.dump().c_str());
             results.push_back(std::move(sj));
           }
         }
@@ -657,7 +661,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  ret = camera->startStream(Camera::StreamMode::kRefreshOnRetrieve);
+  ret = camera->startStream(Camera::StreamMode::kRefreshOnReturn);
   if (ret != MA_OK) {
     MA_LOGE(TAG, "camera startStream failed");
     return 1;
