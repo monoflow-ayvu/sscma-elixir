@@ -119,12 +119,12 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
   auto last_frame_time = std::chrono::steady_clock::now();
 
   while (g_running.load()) {
-    // Retrieve JPEG frame from Channel 0
-    ma_img_t jpeg_frame;
-    ma_err_t ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
+    // Retrieve RAW RGB frame from Channel 0 for TPU processing
+    ma_img_t raw_frame;
+    ma_err_t ret = camera->retrieveFrame(raw_frame, MA_PIXEL_FORMAT_RGB888);
     if (ret != MA_OK) {
       if (ret != MA_AGAIN) {
-        MA_LOGE(TAG, "retrieveFrame failed: %d", ret);
+        MA_LOGE(TAG, "retrieveFrame (raw) failed: %d", ret);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
@@ -146,62 +146,40 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
       auto tpu_start = std::chrono::steady_clock::now();
       auto step_start = tpu_start;
 
-      // Store JPEG data for base64 encoding (copy before decoding)
-      std::string jpeg_data(reinterpret_cast<const char*>(jpeg_frame.data), jpeg_frame.size);
-      uint32_t jpeg_size = jpeg_frame.size;
+      // Retrieve JPEG frame from Channel 1 for transmission (non-blocking)
+      ma_img_t jpeg_frame;
+      std::string jpeg_data;
+      uint32_t jpeg_size = 0;
+      bool have_jpeg = false;
+      
+      if (g_cli_emit_base64) {
+        ret = camera->retrieveFrame(jpeg_frame, MA_PIXEL_FORMAT_JPEG);
+        if (ret == MA_OK) {
+          jpeg_data.assign(reinterpret_cast<const char*>(jpeg_frame.data), jpeg_frame.size);
+          jpeg_size = jpeg_frame.size;
+          have_jpeg = true;
+          camera->returnFrame(jpeg_frame);
+        }
+      }
 
       auto step_end = std::chrono::steady_clock::now();
-      MA_LOGD(TAG, "[TIMING] JPEG copy: %.2f ms", 
-              std::chrono::duration<double, std::milli>(step_end - step_start).count());
+      MA_LOGD(TAG, "[TIMING] JPEG retrieve: %.2f ms (have_jpeg=%d)", 
+              std::chrono::duration<double, std::milli>(step_end - step_start).count(), have_jpeg);
       step_start = step_end;
 
-      // Decode JPEG to cv::Mat (BGR format)
-      ::cv::Mat image_catch = ::cv::imdecode(
-          ::cv::Mat(1, jpeg_size, CV_8UC1, 
-                    const_cast<char*>(jpeg_data.data())),
-          ::cv::IMREAD_COLOR);
-
-      step_end = std::chrono::steady_clock::now();
-      MA_LOGD(TAG, "[TIMING] JPEG decode: %.2f ms", 
-              std::chrono::duration<double, std::milli>(step_end - step_start).count());
-      step_start = step_end;
-
-      // Return JPEG frame immediately after decoding
-      camera->returnFrame(jpeg_frame);
-
-      if (image_catch.empty()) {
-        MA_LOGE(TAG, "Failed to decode JPEG image");
-        last_frame_time = now;
-        continue;
-      }
-
-      // Preprocess image: resize, pad, convert BGR to RGB
-      ::cv::Mat preprocessed_image = preprocessImage(image_catch, model);
-
-      step_end = std::chrono::steady_clock::now();
-      MA_LOGD(TAG, "[TIMING] Preprocess (total): %.2f ms", 
-              std::chrono::duration<double, std::milli>(step_end - step_start).count());
-      step_start = step_end;
-
-      if (preprocessed_image.empty()) {
-        MA_LOGE(TAG, "Preprocessed image is empty");
-        last_frame_time = now;
-        continue;
-      }
-
-      // Create ma_img_t from preprocessed cv::Mat
-      // Note: preprocessed_image must stay in scope until inference completes
+      // Raw frame is already at model input dimensions, just need to set up ma_img_t
+      // The raw frame is RGB888 format from the camera
       ma_img_t img;
-      img.data = preprocessed_image.data;
-      img.size = preprocessed_image.rows * preprocessed_image.cols * preprocessed_image.channels();
-      img.width = preprocessed_image.cols;
-      img.height = preprocessed_image.rows;
+      img.data = raw_frame.data;
+      img.size = raw_frame.size;
+      img.width = raw_frame.width;
+      img.height = raw_frame.height;
       img.format = MA_PIXEL_FORMAT_RGB888;
       img.rotate = MA_PIXEL_ROTATE_0;
       img.physical = false;
 
       step_end = std::chrono::steady_clock::now();
-      MA_LOGD(TAG, "[TIMING] Create ma_img_t: %.2f ms", 
+      MA_LOGD(TAG, "[TIMING] Setup raw frame: %.2f ms", 
               std::chrono::duration<double, std::milli>(step_end - step_start).count());
       step_start = step_end;
 
@@ -366,8 +344,8 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         j["elapsed_since_last_frame"] = elapsed_since_last_frame;
         j["jpeg_size"] = jpeg_size;
 
-        // Add base64-encoded JPEG if requested
-        if (g_cli_emit_base64) {
+        // Add base64-encoded JPEG if requested and available
+        if (g_cli_emit_base64 && have_jpeg) {
           base64_buffer = macaron::Base64::Encode(jpeg_data);
           j["frame"] = base64_buffer;
 
@@ -462,6 +440,9 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
       MA_LOGE(TAG, "Processing pipeline unknown exception");
       last_frame_time = now;
     }
+
+    // Return raw frame after processing
+    camera->returnFrame(raw_frame);
   }
 
   MA_LOGI(TAG, "Main processing pipeline stopped");
@@ -667,7 +648,39 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      // Configure JPEG channel (1) - camera implementation maps JPEG to channel 1
+      // Configure RAW channel (0) - for TPU processing at model input dimensions
+      value.i32 = 0;
+      ret = camera->commandCtrl(Camera::CtrlType::kChannel,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kChannel 0 failed");
+        return 1;
+      }
+      value.u16s[0] = g_model_input_width;
+      value.u16s[1] = g_model_input_height;
+      ret = camera->commandCtrl(Camera::CtrlType::kWindow,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kWindow (ch0) failed");
+        return 1;
+      }
+      value.i32 = static_cast<int>(MA_PIXEL_FORMAT_RGB888);
+      ret = camera->commandCtrl(Camera::CtrlType::kFormat,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFormat (ch0) failed");
+        return 1;
+      }
+      // RAW channel fps (same as camera fps)
+      value.i32 = g_camera_fps;
+      ret = camera->commandCtrl(Camera::CtrlType::kFps,
+                                Camera::CtrlMode::kWrite, value);
+      if (ret != MA_OK) {
+        MA_LOGE(TAG, "commandCtrl kFps (ch0) failed");
+        return 1;
+      }
+
+      // Configure JPEG channel (1) - for transmission at camera dimensions
       value.i32 = 1;
       ret = camera->commandCtrl(Camera::CtrlType::kChannel,
                                 Camera::CtrlMode::kWrite, value);
