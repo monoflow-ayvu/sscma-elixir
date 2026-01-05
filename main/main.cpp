@@ -41,7 +41,6 @@ static std::string g_cli_publish_http_url;
 static int g_camera_width = 0;
 static int g_camera_height = 0;
 static int g_camera_fps = 3;
-static bool g_tpu_use_camera_size = false;
 
 // Model info (read-only after init)
 static std::string g_model_name_str;
@@ -168,9 +167,8 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
               std::chrono::duration<double, std::milli>(step_end - step_start).count(), have_jpeg);
       step_start = step_end;
 
-      // Raw frame is RGB888 format from the camera
-      // If tpu_use_camera_size is enabled, frame is at camera dimensions
-      // Otherwise, it's at model input dimensions
+      // Raw frame is already at model input dimensions, just need to set up ma_img_t
+      // The raw frame is RGB888 format from the camera
       ma_img_t img;
       img.data = raw_frame.data;
       img.size = raw_frame.size;
@@ -262,9 +260,36 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
         nlohmann::json results = nlohmann::json::array();
         const ma_img_t *model_input =
             static_cast<const ma_img_t *>(model->getInput());
-        // Use actual input dimensions (camera size if tpu_use_camera_size, else model input size)
-        int pre_width = g_tpu_use_camera_size ? raw_frame.width : model_input->width;
-        int pre_height = g_tpu_use_camera_size ? raw_frame.height : model_input->height;
+        int pre_width = model_input->width;
+        int pre_height = model_input->height;
+        
+        // Calculate letterboxing parameters for coordinate transformation
+        // When the camera image is fit into the model input (e.g., 426x240 into 640x640),
+        // it gets letterboxed to maintain aspect ratio. We need to account for this
+        // when converting model coordinates back to camera coordinates.
+        float camera_aspect = static_cast<float>(g_camera_width) / g_camera_height;
+        float model_aspect = static_cast<float>(pre_width) / pre_height;
+        
+        float content_w, content_h;  // Size of actual image content within model input
+        float offset_x, offset_y;    // Letterbox padding offset
+        
+        if (camera_aspect >= model_aspect) {
+          // Camera is wider than model (or same) - width fits, height is padded
+          content_w = static_cast<float>(pre_width);
+          content_h = static_cast<float>(g_camera_height) * pre_width / g_camera_width;
+          offset_x = 0.0f;
+          offset_y = (pre_height - content_h) / 2.0f;
+        } else {
+          // Camera is taller than model - height fits, width is padded
+          content_w = static_cast<float>(g_camera_width) * pre_height / g_camera_height;
+          content_h = static_cast<float>(pre_height);
+          offset_x = (pre_width - content_w) / 2.0f;
+          offset_y = 0.0f;
+        }
+        
+        // Scale factors to convert from content area to camera pixels
+        float scale_x = static_cast<float>(g_camera_width) / content_w;
+        float scale_y = static_cast<float>(g_camera_height) / content_h;
 
         if (classifier) {
           const auto &r = classifier->getResults();
@@ -290,13 +315,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
             dj["h"] = it.h;
             dj["score"] = it.score;
             dj["target"] = it.target;
-            // Convert normalized coordinates (0-1 relative to model input) to camera pixel coordinates
-            float scale_x = static_cast<float>(g_camera_width) / static_cast<float>(pre_width);
-            float scale_y = static_cast<float>(g_camera_height) / static_cast<float>(pre_height);
-            float x1 = (it.x - it.w / 2.0f) * pre_width * scale_x;
-            float y1 = (it.y - it.h / 2.0f) * pre_height * scale_y;
-            float x2 = (it.x + it.w / 2.0f) * pre_width * scale_x;
-            float y2 = (it.y + it.h / 2.0f) * pre_height * scale_y;
+            // Transform from model coordinates to camera coordinates accounting for letterboxing
+            float x1 = ((it.x - it.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y1 = ((it.y - it.h / 2.0f) * pre_height - offset_y) * scale_y;
+            float x2 = ((it.x + it.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y2 = ((it.y + it.h / 2.0f) * pre_height - offset_y) * scale_y;
             dj["abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
             MA_LOGD(TAG, "detector result: %s", dj.dump().c_str());
             results.push_back(std::move(dj));
@@ -312,13 +335,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
             pj["box"] = {{"x", it.box.x},         {"y", it.box.y},
                          {"w", it.box.w},         {"h", it.box.h},
                          {"score", it.box.score}, {"target", it.box.target}};
-            // Convert normalized coordinates (0-1 relative to model input) to camera pixel coordinates
-            float scale_x = static_cast<float>(g_camera_width) / static_cast<float>(pre_width);
-            float scale_y = static_cast<float>(g_camera_height) / static_cast<float>(pre_height);
-            float x1 = (it.box.x - it.box.w / 2.0f) * pre_width * scale_x;
-            float y1 = (it.box.y - it.box.h / 2.0f) * pre_height * scale_y;
-            float x2 = (it.box.x + it.box.w / 2.0f) * pre_width * scale_x;
-            float y2 = (it.box.y + it.box.h / 2.0f) * pre_height * scale_y;
+            // Transform from model coordinates to camera coordinates accounting for letterboxing
+            float x1 = ((it.box.x - it.box.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y1 = ((it.box.y - it.box.h / 2.0f) * pre_height - offset_y) * scale_y;
+            float x2 = ((it.box.x + it.box.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y2 = ((it.box.y + it.box.h / 2.0f) * pre_height - offset_y) * scale_y;
             pj["box_abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
             nlohmann::json pts = nlohmann::json::array();
             for (const auto &pt : it.pts) {
@@ -339,13 +360,11 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
             sj["box"] = {{"x", it.box.x},         {"y", it.box.y},
                          {"w", it.box.w},         {"h", it.box.h},
                          {"score", it.box.score}, {"target", it.box.target}};
-            // Convert normalized coordinates (0-1 relative to model input) to camera pixel coordinates
-            float scale_x = static_cast<float>(g_camera_width) / static_cast<float>(pre_width);
-            float scale_y = static_cast<float>(g_camera_height) / static_cast<float>(pre_height);
-            float x1 = (it.box.x - it.box.w / 2.0f) * pre_width * scale_x;
-            float y1 = (it.box.y - it.box.h / 2.0f) * pre_height * scale_y;
-            float x2 = (it.box.x + it.box.w / 2.0f) * pre_width * scale_x;
-            float y2 = (it.box.y + it.box.h / 2.0f) * pre_height * scale_y;
+            // Transform from model coordinates to camera coordinates accounting for letterboxing
+            float x1 = ((it.box.x - it.box.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y1 = ((it.box.y - it.box.h / 2.0f) * pre_height - offset_y) * scale_y;
+            float x2 = ((it.box.x + it.box.w / 2.0f) * pre_width - offset_x) * scale_x;
+            float y2 = ((it.box.y + it.box.h / 2.0f) * pre_height - offset_y) * scale_y;
             sj["box_abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
             sj["mask"] = {{"width", it.mask.width}, {"height", it.mask.height}};
             MA_LOGD(TAG, "segment result: %s", sj.dump().c_str());
@@ -544,7 +563,6 @@ int main(int argc, char **argv) {
   int cameraWidth = 0;   // 0 means use model input dimensions
   int cameraHeight = 0;  // 0 means use model input dimensions
   int cameraFps = 3;
-  bool tpuUseCameraSize = false;
 
   CLI::App app;
   app.add_option("-m,--model", modelPath, "Path to the model file")->required();
@@ -574,9 +592,6 @@ int main(int argc, char **argv) {
   app.add_option("--fps", cameraFps,
                  "FPS for camera capture / TPU processing")
       ->default_val(3);
-  app.add_flag("--tpu-use-camera-size", tpuUseCameraSize,
-               "Make TPU (Channel 0) use camera dimensions instead of model input dimensions")
-      ->default_val(false);
 
   try {
     app.parse(argc, argv);
@@ -593,7 +608,6 @@ int main(int argc, char **argv) {
   g_cli_quiet = quiet;
   g_cli_publish_http_url = publishHttpUrl;
   g_camera_fps = cameraFps;
-  g_tpu_use_camera_size = tpuUseCameraSize;
 
   // Validate model path exists
   {
@@ -674,8 +688,7 @@ int main(int argc, char **argv) {
         return 1;
       }
 
-      // Configure RAW channel (0) - for TPU processing
-      // Use camera dimensions if option is enabled, otherwise use model input dimensions
+      // Configure RAW channel (0) - for TPU processing at model input dimensions
       value.i32 = 0;
       ret = camera->commandCtrl(Camera::CtrlType::kChannel,
                                 Camera::CtrlMode::kWrite, value);
@@ -683,10 +696,8 @@ int main(int argc, char **argv) {
         MA_LOGE(TAG, "commandCtrl kChannel 0 failed");
         return 1;
       }
-      int tpu_width = g_tpu_use_camera_size ? g_camera_width : g_model_input_width;
-      int tpu_height = g_tpu_use_camera_size ? g_camera_height : g_model_input_height;
-      value.u16s[0] = tpu_width;
-      value.u16s[1] = tpu_height;
+      value.u16s[0] = g_model_input_width;
+      value.u16s[1] = g_model_input_height;
       ret = camera->commandCtrl(Camera::CtrlType::kWindow,
                                 Camera::CtrlMode::kWrite, value);
       if (ret != MA_OK) {
@@ -760,11 +771,8 @@ int main(int argc, char **argv) {
   // Create shared state structure for HTTP publishing
   HttpState http_state;
 
-  int tpu_width = g_tpu_use_camera_size ? g_camera_width : g_model_input_width;
-  int tpu_height = g_tpu_use_camera_size ? g_camera_height : g_model_input_height;
-  MA_LOGI(TAG, "Starting processing pipeline (Camera: %dx%d @ %d fps, TPU: %dx%d, Model input: %dx%d)",
-          g_camera_width, g_camera_height, g_camera_fps, tpu_width, tpu_height, 
-          g_model_input_width, g_model_input_height);
+  MA_LOGI(TAG, "Starting processing pipeline (Camera: %dx%d @ %d fps, Model: %dx%d)",
+          g_camera_width, g_camera_height, g_camera_fps, g_model_input_width, g_model_input_height);
 
   // Start pipeline threads
   std::thread processing_thread(mainProcessingPipeline, camera, model, engine, &http_state);
