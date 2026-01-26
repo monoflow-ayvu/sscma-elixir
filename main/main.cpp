@@ -342,10 +342,16 @@ void mainProcessingPipeline(Camera *camera, ma::Model *model,
             float y2 = ((it.box.y + it.box.h / 2.0f) * pre_height - offset_y) * scale_y;
             pj["box_abs"] = {{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
             nlohmann::json pts = nlohmann::json::array();
+            nlohmann::json pts_abs = nlohmann::json::array();
             for (const auto &pt : it.pts) {
               pts.push_back({{"x", pt.x}, {"y", pt.y}, {"z", pt.z}});
+              // Transform keypoint from model coordinates to camera coordinates accounting for letterboxing
+              float abs_x = (pt.x * pre_width - offset_x) * scale_x;
+              float abs_y = (pt.y * pre_height - offset_y) * scale_y;
+              pts_abs.push_back({{"x", abs_x}, {"y", abs_y}, {"z", pt.z}});
             }
             pj["keypoints"] = std::move(pts);
+            pj["keypoints_abs"] = std::move(pts_abs);
             MA_LOGD(TAG, "pose result: %s", pj.dump().c_str());
             results.push_back(std::move(pj));
           }
